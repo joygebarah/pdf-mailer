@@ -454,13 +454,59 @@ def geocode_address(row, mapbox_token, cache):
     return None
 
 
-def find_nearest_sold(client_coords, sold_df, n=3):
-    """Find n nearest sold properties to client location"""
+def find_nearest_sold(client_coords, sold_df, n=3, client_row=None, filter_settings=None):
+    """Find n nearest sold properties, with optional comparable filtering by sqft/age/beds."""
     sold_pool = sold_df.copy()
     sold_pool['distance'] = sold_pool['coords'].apply(
         lambda x: geodesic(client_coords, x).miles if x else float('inf')
     )
-    return sold_pool[sold_pool['distance'] > 0.005].sort_values('distance').head(n).to_dict('records')
+    candidates = sold_pool[sold_pool['distance'] > 0.005].sort_values('distance')
+
+    if filter_settings and client_row is not None:
+        sqft_pct  = filter_settings.get('sqft_pct')
+        age_years = filter_settings.get('age_years')
+        beds_diff = filter_settings.get('beds_diff')
+
+        client_sqft = pd.to_numeric(client_row.get('Sq Ft'), errors='coerce')
+        client_yr   = pd.to_numeric(client_row.get('Yr Built'), errors='coerce')
+        client_beds = pd.to_numeric(client_row.get('Beds'), errors='coerce')
+
+        filtered = candidates.copy()
+
+        if sqft_pct and pd.notna(client_sqft) and client_sqft > 0 and 'Sq Ft' in filtered.columns:
+            filtered = filtered[
+                filtered['Sq Ft'].apply(
+                    lambda x: abs(pd.to_numeric(x, errors='coerce') - client_sqft) / client_sqft <= sqft_pct / 100
+                    if pd.notna(pd.to_numeric(x, errors='coerce')) else False
+                )
+            ]
+
+        if age_years and pd.notna(client_yr) and 'Yr Built' in filtered.columns:
+            filtered = filtered[
+                filtered['Yr Built'].apply(
+                    lambda x: abs(pd.to_numeric(x, errors='coerce') - client_yr) <= age_years
+                    if pd.notna(pd.to_numeric(x, errors='coerce')) else False
+                )
+            ]
+
+        if beds_diff is not None and pd.notna(client_beds) and 'Beds' in filtered.columns:
+            filtered = filtered[
+                filtered['Beds'].apply(
+                    lambda x: abs(pd.to_numeric(x, errors='coerce') - client_beds) <= beds_diff
+                    if pd.notna(pd.to_numeric(x, errors='coerce')) else False
+                )
+            ]
+
+        if len(filtered) >= n:
+            return filtered.head(n).to_dict('records')
+
+        # Fallback: use filtered matches, fill remaining slots from unfiltered by distance
+        filtered_results = filtered.head(n).to_dict('records')
+        used_addresses = {r['Address'] for r in filtered_results}
+        fallback = candidates[~candidates['Address'].isin(used_addresses)].head(n - len(filtered_results))
+        return filtered_results + fallback.to_dict('records')
+
+    return candidates.head(n).to_dict('records')
 
 
 # ─── Main Generation ──────────────────────────────────────────────────────────
@@ -475,7 +521,8 @@ def generate_mailers(
     right_side_image_path=None,
     num_nearby=3,
     num_clients='all',
-    progress_callback=None
+    progress_callback=None,
+    filter_settings=None
 ):
     """
     Generate mailer PDFs from CSV data (matches mailer_app_trifold.py logic).
@@ -563,7 +610,7 @@ def generate_mailers(
         pdf_files = []
 
         for idx, (index, client) in enumerate(valid_clients.iterrows()):
-            nearby = find_nearest_sold(client['coords'], valid_sold, n=num_nearby)
+            nearby = find_nearest_sold(client['coords'], valid_sold, n=num_nearby, client_row=client, filter_settings=filter_settings)
             lat, lon = client['coords']
 
             # Mapbox Static Map URL (same as trifold app)

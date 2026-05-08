@@ -45,6 +45,16 @@ JOB_TTL_SECONDS = 600
 # A single job (even 1000+ mailers) always starts from ~0 and won't hit this.
 MAX_TEMP_USAGE_BYTES = 2 * 1024 * 1024 * 1024
 
+SAVED_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'saved_data')
+
+
+def _parse_positive(val):
+    try:
+        v = float(val)
+        return v if v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
 
 def allowed_file(filename, allowed_extensions):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
@@ -116,7 +126,8 @@ def run_generation(job_id, job_dir, params):
             right_side_image_path=params.get('right_side_path'),
             num_nearby=params.get('num_nearby', 3),
             num_clients=params.get('num_clients', 'all'),
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            filter_settings=params.get('filter_settings'),
         )
 
         if not result['success']:
@@ -171,31 +182,38 @@ def generate():
     os.makedirs(uploads_dir, exist_ok=True)
 
     try:
-        # ── Validate uploads ──
-        if 'client_csv' not in request.files or 'sold_csv' not in request.files:
+        # ── Validate + save client CSV ──
+        if 'client_csv' not in request.files or request.files['client_csv'].filename == '':
             shutil.rmtree(job_dir, ignore_errors=True)
-            return jsonify({'error': 'Both CSV files are required'}), 400
+            return jsonify({'error': 'Client list CSV is required'}), 400
 
         client_csv = request.files['client_csv']
-        sold_csv = request.files['sold_csv']
-
-        if client_csv.filename == '' or sold_csv.filename == '':
-            shutil.rmtree(job_dir, ignore_errors=True)
-            return jsonify({'error': 'Both CSV files are required'}), 400
-
         if not allowed_file(client_csv.filename, ALLOWED_CSV):
             shutil.rmtree(job_dir, ignore_errors=True)
             return jsonify({'error': 'Client file must be a CSV'}), 400
 
-        if not allowed_file(sold_csv.filename, ALLOWED_CSV):
-            shutil.rmtree(job_dir, ignore_errors=True)
-            return jsonify({'error': 'Sold homes file must be a CSV'}), 400
-
-        # ── Save files ──
         client_csv_path = os.path.join(uploads_dir, secure_filename(client_csv.filename))
-        sold_csv_path = os.path.join(uploads_dir, secure_filename(sold_csv.filename))
         client_csv.save(client_csv_path)
-        sold_csv.save(sold_csv_path)
+
+        # ── Sold CSV: uploaded file OR saved master list ──
+        use_saved_sold = request.form.get('use_saved_sold') == 'on'
+        if use_saved_sold:
+            master_path = os.path.join(SAVED_DATA_DIR, 'master_sold.csv')
+            if not os.path.exists(master_path):
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return jsonify({'error': 'No saved sold list found — please upload your master sold list first.'}), 400
+            sold_csv_path = os.path.join(uploads_dir, 'master_sold.csv')
+            shutil.copy(master_path, sold_csv_path)
+        else:
+            if 'sold_csv' not in request.files or request.files['sold_csv'].filename == '':
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return jsonify({'error': 'Sold homes CSV is required (or enable "Use saved sold list")'}), 400
+            sold_csv = request.files['sold_csv']
+            if not allowed_file(sold_csv.filename, ALLOWED_CSV):
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return jsonify({'error': 'Sold homes file must be a CSV'}), 400
+            sold_csv_path = os.path.join(uploads_dir, secure_filename(sold_csv.filename))
+            sold_csv.save(sold_csv_path)
 
         top_banner_path = None
         bottom_banner_path = None
@@ -222,6 +240,11 @@ def generate():
         mapbox_token = request.form.get('mapbox_token', os.getenv('MAPBOX_TOKEN', ''))
         num_nearby = int(request.form.get('num_nearby', 3))
         num_clients = request.form.get('num_clients', 'all')
+
+        sqft_pct  = _parse_positive(request.form.get('sqft_pct'))
+        age_years = _parse_positive(request.form.get('age_years'))
+        beds_diff = _parse_positive(request.form.get('beds_diff'))
+        filter_settings = {'sqft_pct': sqft_pct, 'age_years': age_years, 'beds_diff': beds_diff} if any([sqft_pct, age_years, beds_diff]) else None
 
         if not mapbox_token:
             shutil.rmtree(job_dir, ignore_errors=True)
@@ -254,6 +277,7 @@ def generate():
             'right_side_path': right_side_path,
             'num_nearby': num_nearby,
             'num_clients': num_clients,
+            'filter_settings': filter_settings,
         }
 
         # ── Launch background thread ──
@@ -313,6 +337,93 @@ def download(job_id):
             shutil.rmtree(j['job_dir'], ignore_errors=True)
 
     return response
+
+
+@app.route('/sold-status')
+def sold_status():
+    csv_path = os.path.join(SAVED_DATA_DIR, 'master_sold.csv')
+    ts_path  = os.path.join(SAVED_DATA_DIR, 'master_sold_updated.txt')
+    if os.path.exists(csv_path):
+        updated = open(ts_path).read().strip() if os.path.exists(ts_path) else 'Unknown'
+        return jsonify({'exists': True, 'updated': updated})
+    return jsonify({'exists': False})
+
+
+@app.route('/upload-sold', methods=['POST'])
+def upload_sold():
+    if 'sold_csv' not in request.files or request.files['sold_csv'].filename == '':
+        return jsonify({'error': 'No file provided'}), 400
+    f = request.files['sold_csv']
+    if not allowed_file(f.filename, ALLOWED_CSV):
+        return jsonify({'error': 'Must be a CSV file'}), 400
+    os.makedirs(SAVED_DATA_DIR, exist_ok=True)
+    f.save(os.path.join(SAVED_DATA_DIR, 'master_sold.csv'))
+    timestamp = time.strftime('%B %d, %Y %I:%M %p')
+    with open(os.path.join(SAVED_DATA_DIR, 'master_sold_updated.txt'), 'w') as tf:
+        tf.write(timestamp)
+    return jsonify({'success': True, 'updated': timestamp})
+
+
+@app.route('/lookup', methods=['POST'])
+def lookup():
+    from mailer_generator import geocode_address, find_nearest_sold, load_cache
+    import pandas as pd
+
+    address = request.form.get('address', '').strip()
+    if not address:
+        return jsonify({'error': 'Address is required'}), 400
+
+    mapbox_token = request.form.get('mapbox_token') or os.getenv('MAPBOX_TOKEN', '')
+    if not mapbox_token:
+        return jsonify({'error': 'Mapbox token required'}), 400
+
+    csv_path = os.path.join(SAVED_DATA_DIR, 'master_sold.csv')
+    if not os.path.exists(csv_path):
+        return jsonify({'error': 'No saved sold list found. Please upload your master sold list first.'}), 400
+
+    num_nearby  = int(request.form.get('num_nearby', 3))
+    sqft_pct    = _parse_positive(request.form.get('sqft_pct'))
+    age_years   = _parse_positive(request.form.get('age_years'))
+    beds_diff   = _parse_positive(request.form.get('beds_diff'))
+    filter_settings = {'sqft_pct': sqft_pct, 'age_years': age_years, 'beds_diff': beds_diff} if any([sqft_pct, age_years, beds_diff]) else None
+
+    client_sqft = _parse_positive(request.form.get('client_sqft'))
+    client_yr   = _parse_positive(request.form.get('client_yr'))
+    client_beds = _parse_positive(request.form.get('client_beds'))
+    client_row  = {'Sq Ft': client_sqft, 'Yr Built': client_yr, 'Beds': client_beds} if any([client_sqft, client_yr, client_beds]) else None
+
+    try:
+        cache  = load_cache()
+        coords = geocode_address({'Address': address, 'City': 'Bakersfield', 'ZIP': ''}, mapbox_token, cache)
+        if not coords:
+            return jsonify({'error': f'Could not geocode: {address}'}), 400
+
+        df_sold = pd.read_csv(csv_path)
+        df_sold = df_sold[df_sold['Address'].str.contains('The information', na=False) == False]
+        df_sold['coords'] = [geocode_address(r, mapbox_token, cache) for _, r in df_sold.iterrows()]
+        valid_sold = df_sold.dropna(subset=['coords']).copy()
+
+        if valid_sold.empty:
+            return jsonify({'error': 'Could not geocode any sold properties. Check your Mapbox token.'}), 400
+
+        results = find_nearest_sold(coords, valid_sold, n=num_nearby, client_row=client_row, filter_settings=filter_settings)
+
+        comparables = [{
+            'address':  r.get('Address', ''),
+            'price':    int(r.get('Purchase Amt', 0)),
+            'beds':     r.get('Beds', ''),
+            'baths':    r.get('Baths', ''),
+            'sqft':     int(r.get('Sq Ft', 0)) if r.get('Sq Ft') else '',
+            'yr_built': int(r.get('Yr Built', 0)) if r.get('Yr Built') else '',
+            'distance': round(r.get('distance', 0), 2),
+        } for r in results]
+
+        return jsonify({'comparables': comparables})
+
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

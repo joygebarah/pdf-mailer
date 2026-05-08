@@ -18,6 +18,77 @@
             <p class="subtitle">8.5" x 11" Letter | #10 Window Envelope Compatible</p>
         </header>
         
+        <!-- ══ SAVED SOLD LIST ══ -->
+        <section class="form-section">
+            <h2>💾 Master Sold List</h2>
+            <p class="section-hint">Upload your sold properties CSV once — it stays saved on the server. Swap it out monthly when your data updates.</p>
+            <div id="saved-sold-status" class="saved-status">Checking...</div>
+            <div class="saved-upload-row">
+                <div class="file-input-wrapper" style="flex:1;">
+                    <input type="file" id="saved_sold_upload" accept=".csv">
+                    <span class="file-label">Choose CSV to save...</span>
+                </div>
+                <button type="button" id="save-sold-btn" class="btn-secondary">💾 Save to Server</button>
+            </div>
+        </section>
+
+        <!-- ══ QUICK LOOKUP ══ -->
+        <section class="form-section">
+            <h2>🔎 Quick Lookup</h2>
+            <p class="section-hint">Type one address to instantly see nearby comparable sales — no PDF, no spreadsheet needed. Uses your saved master sold list above.</p>
+            <div class="form-group">
+                <label for="lookup_address">Property Address</label>
+                <input type="text" id="lookup_address" placeholder="e.g. 700 PALO VERDE ST, BAKERSFIELD">
+            </div>
+            <p class="lookup-subheader">Property details <span class="optional-tag">Optional</span> — fill these in to enable filters</p>
+            <div class="form-grid form-grid-3">
+                <div class="form-group">
+                    <label for="lookup_sqft">Sq Ft</label>
+                    <input type="number" id="lookup_sqft" placeholder="e.g. 1488">
+                </div>
+                <div class="form-group">
+                    <label for="lookup_yr">Year Built</label>
+                    <input type="number" id="lookup_yr" placeholder="e.g. 1953">
+                </div>
+                <div class="form-group">
+                    <label for="lookup_beds">Beds</label>
+                    <input type="number" id="lookup_beds" placeholder="e.g. 3">
+                </div>
+            </div>
+            <div class="form-grid form-grid-3">
+                <div class="form-group">
+                    <label for="lookup_sqft_pct">Sq Ft Within (%)</label>
+                    <input type="number" id="lookup_sqft_pct" min="1" max="100" placeholder="e.g. 15">
+                </div>
+                <div class="form-group">
+                    <label for="lookup_age_years">Year Built Within (years)</label>
+                    <input type="number" id="lookup_age_years" min="1" max="100" placeholder="e.g. 20">
+                </div>
+                <div class="form-group">
+                    <label for="lookup_beds_diff">Beds Within</label>
+                    <input type="number" id="lookup_beds_diff" min="1" max="10" placeholder="e.g. 1">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="lookup_num_nearby">Comparables to show</label>
+                <select id="lookup_num_nearby">
+                    <option value="3" selected>3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                </select>
+            </div>
+            <button type="button" id="lookup-btn" class="btn-primary" style="margin-top:0.75rem;">🔎 Find Comparables</button>
+            <div id="lookup-error" class="status-message error" style="display:none;margin-top:1rem;"></div>
+            <div id="lookup-results" style="display:none;margin-top:1rem;">
+                <table class="lookup-table">
+                    <thead><tr><th>Address</th><th>Price</th><th>Bed/Bath</th><th>Sq Ft</th><th>Yr Built</th><th>Distance</th></tr></thead>
+                    <tbody id="lookup-tbody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <div class="section-divider">📄 Batch PDF Generator</div>
+
         <form id="mailer-form" enctype="multipart/form-data">
             <!-- CSV Files Section -->
             <section class="form-section">
@@ -32,7 +103,11 @@
                     </div>
                     <div class="form-group">
                         <label for="sold_csv">Sold Homes List *</label>
-                        <div class="file-input-wrapper">
+                        <label class="checkbox-label" style="margin-bottom:0.4rem;">
+                            <input type="checkbox" id="use_saved_sold" name="use_saved_sold">
+                            Use saved master list
+                        </label>
+                        <div id="sold-csv-wrapper" class="file-input-wrapper">
                             <input type="file" id="sold_csv" name="sold_csv" accept=".csv" required>
                             <span class="file-label">Choose CSV file...</span>
                         </div>
@@ -99,6 +174,29 @@
                 </div>
             </section>
             
+            <!-- Comparable Filters Section -->
+            <section class="form-section">
+                <h2>🔍 Comparable Filters <span class="optional-tag">(Optional)</span></h2>
+                <p class="section-hint">Only show sold properties that are similar to each client's home. Leave a field blank to skip that filter. If too few matches are found, the app falls back to nearest by distance automatically.</p>
+                <div class="form-grid form-grid-3">
+                    <div class="form-group">
+                        <label for="sqft_pct">Sq Ft Within (%)</label>
+                        <input type="number" id="sqft_pct" name="sqft_pct" min="1" max="100" step="1" placeholder="e.g. 15">
+                        <span class="input-hint">e.g. 15 = within 15% sq ft</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="age_years">Year Built Within (years)</label>
+                        <input type="number" id="age_years" name="age_years" min="1" max="100" step="1" placeholder="e.g. 20">
+                        <span class="input-hint">e.g. 20 = built within 20 years</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="beds_diff">Beds Within (number)</label>
+                        <input type="number" id="beds_diff" name="beds_diff" min="1" max="10" step="1" placeholder="e.g. 1">
+                        <span class="input-hint">e.g. 1 = within 1 bedroom</span>
+                    </div>
+                </div>
+            </section>
+
             <!-- Submit Button -->
             <div class="submit-section">
                 <button type="submit" id="submit-btn" class="btn-primary">
@@ -279,6 +377,115 @@
             btnLoading.style.display = 'none';
             submitBtn.disabled = false;
         }
+
+        // ─── Saved Sold List ──────────────────────────────────────────────
+        async function checkSavedStatus() {
+            try {
+                const res  = await fetch('/sold-status');
+                const data = await res.json();
+                const el   = document.getElementById('saved-sold-status');
+                el.innerHTML = data.exists
+                    ? `<span class="saved-ok">✓ Saved list ready</span> — last updated: ${data.updated}`
+                    : '<span class="saved-none">No saved list yet — upload one below</span>';
+            } catch(e) { console.warn('sold-status check failed', e); }
+        }
+
+        document.getElementById('saved_sold_upload').addEventListener('change', function() {
+            const label = this.parentElement.querySelector('.file-label');
+            label.textContent = this.files.length ? this.files[0].name : 'Choose CSV to save...';
+            label.classList.toggle('has-file', this.files.length > 0);
+        });
+
+        document.getElementById('save-sold-btn').addEventListener('click', async function() {
+            const fileInput = document.getElementById('saved_sold_upload');
+            if (!fileInput.files.length) { alert('Please choose a CSV file first'); return; }
+            const fd = new FormData();
+            fd.append('sold_csv', fileInput.files[0]);
+            this.disabled = true; this.textContent = 'Saving...';
+            try {
+                const res  = await fetch('/upload-sold', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (data.success) {
+                    checkSavedStatus();
+                    this.textContent = '✓ Saved!';
+                    setTimeout(() => { this.textContent = '💾 Save to Server'; this.disabled = false; }, 2000);
+                } else {
+                    alert(data.error || 'Upload failed');
+                    this.disabled = false; this.textContent = '💾 Save to Server';
+                }
+            } catch(e) {
+                alert('Upload failed'); this.disabled = false; this.textContent = '💾 Save to Server';
+            }
+        });
+
+        // ─── Use saved sold list toggle ───────────────────────────────────
+        document.getElementById('use_saved_sold').addEventListener('change', function() {
+            const wrapper  = document.getElementById('sold-csv-wrapper');
+            const input    = document.getElementById('sold_csv');
+            wrapper.style.display = this.checked ? 'none' : 'block';
+            input.required = !this.checked;
+        });
+
+        // ─── Quick Lookup ─────────────────────────────────────────────────
+        document.getElementById('lookup-btn').addEventListener('click', async function() {
+            const address = document.getElementById('lookup_address').value.trim();
+            if (!address) { alert('Please enter an address'); return; }
+
+            const mapboxToken = document.getElementById('mapbox_token').value.trim();
+            const fd = new FormData();
+            fd.append('address',    address);
+            fd.append('mapbox_token', mapboxToken);
+            fd.append('num_nearby', document.getElementById('lookup_num_nearby').value);
+
+            const sqft    = document.getElementById('lookup_sqft').value;
+            const yr      = document.getElementById('lookup_yr').value;
+            const beds    = document.getElementById('lookup_beds').value;
+            const sqftPct = document.getElementById('lookup_sqft_pct').value;
+            const ageYrs  = document.getElementById('lookup_age_years').value;
+            const bedsDiff= document.getElementById('lookup_beds_diff').value;
+
+            if (sqft)    fd.append('client_sqft', sqft);
+            if (yr)      fd.append('client_yr',   yr);
+            if (beds)    fd.append('client_beds',  beds);
+            if (sqftPct) fd.append('sqft_pct',    sqftPct);
+            if (ageYrs)  fd.append('age_years',   ageYrs);
+            if (bedsDiff)fd.append('beds_diff',   bedsDiff);
+
+            this.disabled = true; this.textContent = 'Looking up...';
+            document.getElementById('lookup-error').style.display   = 'none';
+            document.getElementById('lookup-results').style.display = 'none';
+
+            try {
+                const res  = await fetch('/lookup', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok) {
+                    const errEl = document.getElementById('lookup-error');
+                    errEl.textContent = '❌ ' + (data.error || 'Lookup failed');
+                    errEl.style.display = 'block';
+                } else {
+                    const tbody = document.getElementById('lookup-tbody');
+                    tbody.innerHTML = '';
+                    data.comparables.forEach(c => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `<td>${c.address}</td>
+                            <td class="price-cell">$${(c.price/1000).toFixed(0)}k</td>
+                            <td>${c.beds}/${c.baths}</td>
+                            <td>${c.sqft ? Number(c.sqft).toLocaleString() : '-'}</td>
+                            <td>${c.yr_built || '-'}</td>
+                            <td>${c.distance} mi</td>`;
+                        tbody.appendChild(tr);
+                    });
+                    document.getElementById('lookup-results').style.display = 'block';
+                }
+            } catch(e) {
+                const errEl = document.getElementById('lookup-error');
+                errEl.textContent = '❌ ' + e.message;
+                errEl.style.display = 'block';
+            }
+            this.disabled = false; this.textContent = '🔎 Find Comparables';
+        });
+
+        checkSavedStatus();
     </script>
 </body>
 </html>

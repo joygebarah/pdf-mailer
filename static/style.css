@@ -394,6 +394,95 @@ footer p {
     margin-top: 0.5rem;
 }
 
+.section-divider {
+    text-align: center;
+    color: #888;
+    font-size: 0.8rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin: 2rem 0 1rem;
+    border-top: 1px solid #333;
+    padding-top: 1.5rem;
+}
+
+.saved-status {
+    font-size: 0.9rem;
+    padding: 0.5rem 0.75rem;
+    background: #1e1e1e;
+    border-radius: 6px;
+    margin-bottom: 0.75rem;
+    border: 1px solid #333;
+}
+
+.saved-ok   { color: #27ae60; font-weight: 600; }
+.saved-none { color: #e67e22; }
+
+.saved-upload-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.btn-secondary {
+    background: #333;
+    color: #fff;
+    border: 1px solid #555;
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+.btn-secondary:hover { background: #444; }
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: #aaa;
+    cursor: pointer;
+}
+.checkbox-label input[type="checkbox"] { width: auto; margin: 0; }
+
+.lookup-subheader {
+    font-size: 0.85rem;
+    color: #888;
+    margin: 0.75rem 0 0.5rem;
+}
+
+.lookup-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+.lookup-table th {
+    background: #8B4513;
+    color: #fff;
+    padding: 8px 10px;
+    text-align: left;
+}
+.lookup-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid #2a2a2a;
+}
+.lookup-table tr:nth-child(even) td { background: #1a1a1a; }
+
+.optional-tag {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: #888;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-left: 8px;
+    vertical-align: middle;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
 .btn-download:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 30px rgba(39, 174, 96, 0.4);

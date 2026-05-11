@@ -241,10 +241,15 @@ def generate():
         num_nearby = int(request.form.get('num_nearby', 3))
         num_clients = request.form.get('num_clients', 'all')
 
-        sqft_pct  = _parse_positive(request.form.get('sqft_pct'))
-        age_years = _parse_positive(request.form.get('age_years'))
-        beds_diff = _parse_positive(request.form.get('beds_diff'))
-        filter_settings = {'sqft_pct': sqft_pct, 'age_years': age_years, 'beds_diff': beds_diff} if any([sqft_pct, age_years, beds_diff]) else None
+        sqft_pct        = _parse_positive(request.form.get('sqft_pct'))
+        age_years       = _parse_positive(request.form.get('age_years'))
+        beds_diff       = _parse_positive(request.form.get('beds_diff'))
+        lot_size_pct    = _parse_positive(request.form.get('lot_size_pct'))
+        match_prop_type = request.form.get('match_prop_type') == 'on'
+        filter_settings = {
+            'sqft_pct': sqft_pct, 'age_years': age_years, 'beds_diff': beds_diff,
+            'lot_size_pct': lot_size_pct, 'match_prop_type': match_prop_type,
+        } if any([sqft_pct, age_years, beds_diff, lot_size_pct, match_prop_type]) else None
 
         if not mapbox_token:
             shutil.rmtree(job_dir, ignore_errors=True)
@@ -381,16 +386,26 @@ def lookup():
     if not os.path.exists(csv_path):
         return jsonify({'error': 'No saved sold list found. Please upload your master sold list first.'}), 400
 
-    num_nearby  = int(request.form.get('num_nearby', 3))
-    sqft_pct    = _parse_positive(request.form.get('sqft_pct'))
-    age_years   = _parse_positive(request.form.get('age_years'))
-    beds_diff   = _parse_positive(request.form.get('beds_diff'))
-    filter_settings = {'sqft_pct': sqft_pct, 'age_years': age_years, 'beds_diff': beds_diff} if any([sqft_pct, age_years, beds_diff]) else None
+    num_nearby      = int(request.form.get('num_nearby', 3))
+    sqft_pct        = _parse_positive(request.form.get('sqft_pct'))
+    age_years       = _parse_positive(request.form.get('age_years'))
+    beds_diff       = _parse_positive(request.form.get('beds_diff'))
+    lot_size_pct    = _parse_positive(request.form.get('lot_size_pct'))
+    match_prop_type = request.form.get('match_prop_type') == 'on'
+    filter_settings = {
+        'sqft_pct': sqft_pct, 'age_years': age_years, 'beds_diff': beds_diff,
+        'lot_size_pct': lot_size_pct, 'match_prop_type': match_prop_type,
+    } if any([sqft_pct, age_years, beds_diff, lot_size_pct, match_prop_type]) else None
 
-    client_sqft = _parse_positive(request.form.get('client_sqft'))
-    client_yr   = _parse_positive(request.form.get('client_yr'))
-    client_beds = _parse_positive(request.form.get('client_beds'))
-    client_row  = {'Sq Ft': client_sqft, 'Yr Built': client_yr, 'Beds': client_beds} if any([client_sqft, client_yr, client_beds]) else None
+    client_sqft      = _parse_positive(request.form.get('client_sqft'))
+    client_yr        = _parse_positive(request.form.get('client_yr'))
+    client_beds      = _parse_positive(request.form.get('client_beds'))
+    client_lot       = _parse_positive(request.form.get('client_lot_size'))
+    client_prop_type = request.form.get('client_prop_type', '').strip() or None
+    client_row = {
+        'Sq Ft': client_sqft, 'Yr Built': client_yr, 'Beds': client_beds,
+        'Lot Size': client_lot, 'Property Type': client_prop_type,
+    } if any([client_sqft, client_yr, client_beds, client_lot, client_prop_type]) else None
 
     try:
         cache  = load_cache()

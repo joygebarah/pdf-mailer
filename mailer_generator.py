@@ -455,7 +455,7 @@ def geocode_address(row, mapbox_token, cache):
 
 
 def find_nearest_sold(client_coords, sold_df, n=3, client_row=None, filter_settings=None):
-    """Find n nearest sold properties, with optional comparable filtering by sqft/age/beds."""
+    """Find n nearest sold properties, with optional comparable filtering by sqft/age/beds/lot/type."""
     sold_pool = sold_df.copy()
     sold_pool['distance'] = sold_pool['coords'].apply(
         lambda x: geodesic(client_coords, x).miles if x else float('inf')
@@ -463,13 +463,17 @@ def find_nearest_sold(client_coords, sold_df, n=3, client_row=None, filter_setti
     candidates = sold_pool[sold_pool['distance'] > 0.005].sort_values('distance')
 
     if filter_settings and client_row is not None:
-        sqft_pct  = filter_settings.get('sqft_pct')
-        age_years = filter_settings.get('age_years')
-        beds_diff = filter_settings.get('beds_diff')
+        sqft_pct        = filter_settings.get('sqft_pct')
+        age_years       = filter_settings.get('age_years')
+        beds_diff       = filter_settings.get('beds_diff')
+        lot_size_pct    = filter_settings.get('lot_size_pct')
+        match_prop_type = filter_settings.get('match_prop_type')
 
         client_sqft = pd.to_numeric(client_row.get('Sq Ft'), errors='coerce')
         client_yr   = pd.to_numeric(client_row.get('Yr Built'), errors='coerce')
         client_beds = pd.to_numeric(client_row.get('Beds'), errors='coerce')
+        client_lot  = pd.to_numeric(client_row.get('Lot Size'), errors='coerce')
+        client_type = str(client_row.get('Property Type', '') or '').strip().lower()
 
         filtered = candidates.copy()
 
@@ -494,6 +498,21 @@ def find_nearest_sold(client_coords, sold_df, n=3, client_row=None, filter_setti
                 filtered['Beds'].apply(
                     lambda x: abs(pd.to_numeric(x, errors='coerce') - client_beds) <= beds_diff
                     if pd.notna(pd.to_numeric(x, errors='coerce')) else False
+                )
+            ]
+
+        if lot_size_pct and pd.notna(client_lot) and client_lot > 0 and 'Lot Size' in filtered.columns:
+            filtered = filtered[
+                filtered['Lot Size'].apply(
+                    lambda x: abs(pd.to_numeric(x, errors='coerce') - client_lot) / client_lot <= lot_size_pct / 100
+                    if pd.notna(pd.to_numeric(x, errors='coerce')) else False
+                )
+            ]
+
+        if match_prop_type and client_type and 'Property Type' in filtered.columns:
+            filtered = filtered[
+                filtered['Property Type'].apply(
+                    lambda x: str(x).strip().lower() == client_type if pd.notna(x) else False
                 )
             ]
 

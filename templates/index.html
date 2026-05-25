@@ -18,8 +18,8 @@
             <p class="subtitle">8.5" x 11" Letter | #10 Window Envelope Compatible</p>
         </header>
         
-        <!-- ══ SAVED SOLD LIST ══ -->
-        <section class="form-section">
+        <!-- ══ SAVED SOLD LIST ══ (hidden — not yet funded) -->
+        <section class="form-section" style="display:none;">
             <h2>💾 Master Sold List</h2>
             <p class="section-hint">Upload your sold properties CSV once — it stays saved on the server. Swap it out monthly when your data updates.</p>
             <div id="saved-sold-status" class="saved-status">Checking...</div>
@@ -32,8 +32,8 @@
             </div>
         </section>
 
-        <!-- ══ QUICK LOOKUP ══ -->
-        <section class="form-section">
+        <!-- ══ QUICK LOOKUP ══ (hidden — not yet funded) -->
+        <section class="form-section" style="display:none;">
             <h2>🔎 Quick Lookup</h2>
             <p class="section-hint">Type one address to instantly see nearby comparable sales — no PDF, no spreadsheet needed. Uses your saved master sold list above.</p>
             <div class="form-group">
@@ -129,7 +129,8 @@
                     </div>
                     <div class="form-group">
                         <label for="sold_csv">Sold Homes List *</label>
-                        <label class="checkbox-label" style="margin-bottom:0.4rem;">
+                        <!-- Use saved master list checkbox hidden — not yet funded -->
+                        <label class="checkbox-label" style="display:none;margin-bottom:0.4rem;">
                             <input type="checkbox" id="use_saved_sold" name="use_saved_sold">
                             Use saved master list
                         </label>
@@ -221,7 +222,8 @@
                         <span class="input-hint">e.g. 1 = within 1 bedroom</span>
                     </div>
                 </div>
-                <div class="form-grid" style="margin-top:1rem;">
+                <!-- Lot size % + property type row hidden — not yet funded -->
+                <div class="form-grid" style="display:none;margin-top:1rem;">
                     <div class="form-group">
                         <label for="lot_size_pct">Lot Size Within (%) <span class="optional-tag">Needs "Lot Size" column</span></label>
                         <input type="number" id="lot_size_pct" name="lot_size_pct" min="1" max="100" step="1" placeholder="e.g. 30">

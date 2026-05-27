@@ -18,8 +18,8 @@
             <p class="subtitle">8.5" x 11" Letter | #10 Window Envelope Compatible</p>
         </header>
         
-        <!-- ══ SAVED SOLD LIST ══ -->
-        <section class="form-section">
+        <!-- ══ SAVED SOLD LIST ══ (hidden — not yet funded) -->
+        <section class="form-section" style="display:none;">
             <h2>💾 Master Sold List</h2>
             <p class="section-hint">Upload your sold properties CSV once — it stays saved on the server. Swap it out monthly when your data updates.</p>
             <div id="saved-sold-status" class="saved-status">Checking...</div>
@@ -32,8 +32,8 @@
             </div>
         </section>
 
-        <!-- ══ QUICK LOOKUP ══ -->
-        <section class="form-section">
+        <!-- ══ QUICK LOOKUP ══ (hidden — not yet funded) -->
+        <section class="form-section" style="display:none;">
             <h2>🔎 Quick Lookup</h2>
             <p class="section-hint">Type one address to instantly see nearby comparable sales — no PDF, no spreadsheet needed. Uses your saved master sold list above.</p>
             <div class="form-group">
@@ -55,6 +55,18 @@
                     <input type="number" id="lookup_beds" placeholder="e.g. 3">
                 </div>
             </div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="lookup_lot_size">Lot Size (sq ft) <span class="optional-tag">Optional</span></label>
+                    <input type="number" id="lookup_lot_size" placeholder="e.g. 6000">
+                    <span class="input-hint">Requires "Lot Size" column in your sold CSV</span>
+                </div>
+                <div class="form-group">
+                    <label for="lookup_prop_type">Property Type <span class="optional-tag">Optional</span></label>
+                    <input type="text" id="lookup_prop_type" placeholder="e.g. SFR">
+                    <span class="input-hint">Requires "Property Type" column in your sold CSV</span>
+                </div>
+            </div>
             <div class="form-grid form-grid-3">
                 <div class="form-group">
                     <label for="lookup_sqft_pct">Sq Ft Within (%)</label>
@@ -67,6 +79,20 @@
                 <div class="form-group">
                     <label for="lookup_beds_diff">Beds Within</label>
                     <input type="number" id="lookup_beds_diff" min="1" max="10" placeholder="e.g. 1">
+                </div>
+            </div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="lookup_lot_size_pct">Lot Size Within (%)</label>
+                    <input type="number" id="lookup_lot_size_pct" min="1" max="100" placeholder="e.g. 30">
+                    <span class="input-hint">Requires Lot Size field above + "Lot Size" column in sold CSV</span>
+                </div>
+                <div class="form-group" style="display:flex;align-items:center;padding-top:1.5rem;">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="lookup_match_prop_type">
+                        Match property type exactly
+                        <span class="input-hint" style="display:block;">Requires Property Type field above + "Property Type" column in sold CSV</span>
+                    </label>
                 </div>
             </div>
             <div class="form-group">
@@ -103,7 +129,8 @@
                     </div>
                     <div class="form-group">
                         <label for="sold_csv">Sold Homes List *</label>
-                        <label class="checkbox-label" style="margin-bottom:0.4rem;">
+                        <!-- Use saved master list checkbox hidden — not yet funded -->
+                        <label class="checkbox-label" style="display:none;margin-bottom:0.4rem;">
                             <input type="checkbox" id="use_saved_sold" name="use_saved_sold">
                             Use saved master list
                         </label>
@@ -193,6 +220,21 @@
                         <label for="beds_diff">Beds Within (number)</label>
                         <input type="number" id="beds_diff" name="beds_diff" min="1" max="10" step="1" placeholder="e.g. 1">
                         <span class="input-hint">e.g. 1 = within 1 bedroom</span>
+                    </div>
+                </div>
+                <!-- Lot size % + property type row -->
+                <div class="form-grid" style="margin-top:1rem;">
+                    <div class="form-group">
+                        <label for="lot_size_pct">Lot Size Within (%) <span class="optional-tag">Needs "Lot Size" column</span></label>
+                        <input type="number" id="lot_size_pct" name="lot_size_pct" min="1" max="100" step="1" placeholder="e.g. 30">
+                        <span class="input-hint">Add a "Lot Size" column to both CSVs to use this filter</span>
+                    </div>
+                    <div class="form-group" style="display:flex;align-items:center;padding-top:1.5rem;">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="match_prop_type" id="match_prop_type">
+                            Match property type exactly <span class="optional-tag">Needs "Property Type" column</span>
+                            <span class="input-hint" style="display:block;">Add a "Property Type" column to both CSVs (e.g. SFR, Condo) to use this filter</span>
+                        </label>
                     </div>
                 </div>
             </section>
@@ -437,19 +479,27 @@
             fd.append('mapbox_token', mapboxToken);
             fd.append('num_nearby', document.getElementById('lookup_num_nearby').value);
 
-            const sqft    = document.getElementById('lookup_sqft').value;
-            const yr      = document.getElementById('lookup_yr').value;
-            const beds    = document.getElementById('lookup_beds').value;
-            const sqftPct = document.getElementById('lookup_sqft_pct').value;
-            const ageYrs  = document.getElementById('lookup_age_years').value;
-            const bedsDiff= document.getElementById('lookup_beds_diff').value;
+            const sqft        = document.getElementById('lookup_sqft').value;
+            const yr          = document.getElementById('lookup_yr').value;
+            const beds        = document.getElementById('lookup_beds').value;
+            const lotSize     = document.getElementById('lookup_lot_size').value;
+            const propType    = document.getElementById('lookup_prop_type').value.trim();
+            const sqftPct     = document.getElementById('lookup_sqft_pct').value;
+            const ageYrs      = document.getElementById('lookup_age_years').value;
+            const bedsDiff    = document.getElementById('lookup_beds_diff').value;
+            const lotSizePct  = document.getElementById('lookup_lot_size_pct').value;
+            const matchPropType = document.getElementById('lookup_match_prop_type').checked;
 
-            if (sqft)    fd.append('client_sqft', sqft);
-            if (yr)      fd.append('client_yr',   yr);
-            if (beds)    fd.append('client_beds',  beds);
-            if (sqftPct) fd.append('sqft_pct',    sqftPct);
-            if (ageYrs)  fd.append('age_years',   ageYrs);
-            if (bedsDiff)fd.append('beds_diff',   bedsDiff);
+            if (sqft)         fd.append('client_sqft',    sqft);
+            if (yr)           fd.append('client_yr',      yr);
+            if (beds)         fd.append('client_beds',    beds);
+            if (lotSize)      fd.append('client_lot_size',lotSize);
+            if (propType)     fd.append('client_prop_type',propType);
+            if (sqftPct)      fd.append('sqft_pct',       sqftPct);
+            if (ageYrs)       fd.append('age_years',      ageYrs);
+            if (bedsDiff)     fd.append('beds_diff',      bedsDiff);
+            if (lotSizePct)   fd.append('lot_size_pct',   lotSizePct);
+            if (matchPropType)fd.append('match_prop_type','on');
 
             this.disabled = true; this.textContent = 'Looking up...';
             document.getElementById('lookup-error').style.display   = 'none';

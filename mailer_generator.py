@@ -443,7 +443,10 @@ def geocode_address(row, mapbox_token, cache):
         data = response.json()
 
         if data.get('features'):
-            coords_long_lat = data['features'][0]['center']  # [longitude, latitude]
+            feature = data['features'][0]
+            if feature.get('relevance', 0) < 0.4:
+                return None
+            coords_long_lat = feature['center']  # [longitude, latitude]
             coords = [coords_long_lat[1], coords_long_lat[0]]  # -> [lat, lon]
             cache[full_address] = coords
             save_cache(cache)

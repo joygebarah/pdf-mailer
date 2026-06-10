@@ -467,6 +467,7 @@ def analyzer():
 def _run_analysis_job(job_id, params):
     job = analyze_jobs[job_id]
     job['status'] = 'running'
+    is_single = bool(params.get('single_address'))
 
     def progress_cb(done, total, address):
         job['done'] = done
@@ -483,7 +484,14 @@ def _run_analysis_job(job_id, params):
             csv_path=params.get('csv_path'),
             single_address=params.get('single_address'),
             max_addresses=params.get('max_addresses'),
+            return_images=is_single,
         )
+        if is_single and results:
+            # Pop images out so they don't end up in the CSV download
+            job['single_images'] = {
+                'sv_images': results[0].pop('_sv_images', []),
+                'sat_image': results[0].pop('_sat_image', None),
+            }
         job['results'] = results
         job['status'] = 'done'
         job['done'] = len(results)
@@ -572,6 +580,9 @@ def analyze():
             'current_address': '',
             'message': '',
             'results': None,
+            'single_images': None,
+            'prompts': prompts,
+            'enabled_prompts': enabled_prompts,
             'job_dir': job_dir,
             'finished_at': None,
         }
@@ -639,6 +650,35 @@ def analyze_download(job_id):
         mimetype='text/csv',
         headers={'Content-Disposition': 'attachment; filename=property_analysis.csv'},
     )
+
+
+@app.route('/analyze/result/<job_id>')
+def analyze_result(job_id):
+    job = analyze_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if job['status'] != 'done':
+        return jsonify({'error': 'Job not finished yet'}), 400
+
+    result = (job.get('results') or [{}])[0]
+    images = job.get('single_images') or {}
+    prompts = job.get('prompts', ['', '', '', ''])
+    enabled = job.get('enabled_prompts', [True, True, True, True])
+
+    responses = []
+    for i in range(4):
+        responses.append({
+            'prompt_text': prompts[i] if i < len(prompts) else '',
+            'enabled': enabled[i] if i < len(enabled) else True,
+            'response': result.get(f'Prompt_{i + 1}_Response', ''),
+        })
+
+    return jsonify({
+        'responses': responses,
+        'sv_images': images.get('sv_images', []),
+        'sat_image': images.get('sat_image'),
+        'address': result.get('Address', ''),
+    })
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@ sends all to Gemini in one call with 4 custom prompts,
 returns a dict with Prompt_1_Response ... Prompt_4_Response.
 """
 
+import base64
 import re
 import time
 import traceback
@@ -154,7 +155,9 @@ def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: s
     # Number the active prompts 1..N in the Gemini request
     combined_prompt = (
         "You are analyzing a residential property using the provided street view and satellite images.\n"
-        "Answer each of the following prompts separately and concisely.\n"
+        "Answer each prompt with detailed, specific observations from the images.\n"
+        "Mention materials, colors, visible condition, defects, and notable features you can see.\n"
+        "For grading prompts, state the grade and then explain your reasoning with 2-3 sentences of specific visual evidence.\n"
         "Return ONLY in this exact format:\n\n"
     )
     for seq, (_, p) in enumerate(active, 1):
@@ -201,6 +204,7 @@ def run_full_analysis(
     single_address: str = None,
     max_addresses: int = None,
     enabled_prompts: list = None,
+    return_images: bool = False,
 ) -> list:
     """
     Main analysis runner. Returns list of row dicts with original columns
@@ -250,6 +254,9 @@ def run_full_analysis(
         result_row = dict(row)
         result_row.update(answers)
         result_row['Street_View_Available'] = 'Yes' if street_view_available else 'No'
+        if return_images:
+            result_row['_sv_images'] = [base64.b64encode(img).decode() for img in sv_images]
+            result_row['_sat_image'] = base64.b64encode(sat).decode() if sat else None
         results.append(result_row)
 
         # Free tier: 10 RPM → 6s sleep between addresses

@@ -3,6 +3,8 @@ Real Estate Mailer Generator - Flask Web App
 Asynchronous background processing with progress tracking
 """
 
+import csv
+import io
 import os
 import sys
 import glob
@@ -12,7 +14,7 @@ import threading
 import time
 import uuid
 import zipfile
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, Response
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
@@ -22,6 +24,7 @@ if sys.platform == 'win32' and os.path.exists(MSYS2_BIN_PATH):
     os.add_dll_directory(MSYS2_BIN_PATH)
 
 from mailer_generator import generate_mailers
+from analyzer import run_full_analysis, parse_csv
 
 # Load environment variables
 load_dotenv()
@@ -34,8 +37,9 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-key-change-in-production
 ALLOWED_CSV = {'csv'}
 ALLOWED_IMAGES = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
-# In-memory job store  { job_id: { status, progress, total, message, result, ... } }
-jobs = {}
+# In-memory job stores
+jobs = {}           # mailer jobs
+analyze_jobs = {}   # analyzer jobs
 
 # Auto-cleanup: remove finished jobs older than 10 minutes
 JOB_TTL_SECONDS = 600
@@ -165,8 +169,12 @@ def run_generation(job_id, job_dir, params):
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/')
+def home():
+    return render_template('home.html')
+
+
+@app.route('/mailer')
 def index():
-    """Render the main form"""
     default_mapbox_token = os.getenv('MAPBOX_TOKEN', '')
     return render_template('index.html', default_mapbox_token=default_mapbox_token)
 
@@ -439,6 +447,182 @@ def lookup():
         import traceback
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
+
+
+# ─── Analyzer Routes ───────────────────────────────────────────────────────────
+
+@app.route('/analyzer')
+def analyzer():
+    return render_template('analyzer.html')
+
+
+def _run_analysis_job(job_id, params):
+    job = analyze_jobs[job_id]
+    job['status'] = 'running'
+
+    def progress_cb(done, total, address):
+        job['done'] = done
+        job['total'] = total
+        job['current_address'] = address
+
+    try:
+        results = run_full_analysis(
+            prompts=params['prompts'],
+            maps_key=params['maps_key'],
+            gemini_key=params['gemini_key'],
+            progress_cb=progress_cb,
+            csv_path=params.get('csv_path'),
+            single_address=params.get('single_address'),
+            max_addresses=params.get('max_addresses'),
+        )
+        job['results'] = results
+        job['status'] = 'done'
+        job['done'] = len(results)
+        job['total'] = len(results)
+        job['current_address'] = ''
+        job['finished_at'] = time.time()
+    except Exception as e:
+        import traceback
+        job['status'] = 'failed'
+        job['message'] = str(e)
+        job['traceback'] = traceback.format_exc()
+        job['finished_at'] = time.time()
+
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    job_id = str(uuid.uuid4())
+    job_dir = tempfile.mkdtemp(prefix='analyzer_job_')
+    uploads_dir = os.path.join(job_dir, 'uploads')
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    try:
+        prompts = [
+            request.form.get('prompt_1', '').strip(),
+            request.form.get('prompt_2', '').strip(),
+            request.form.get('prompt_3', '').strip(),
+            request.form.get('prompt_4', '').strip(),
+        ]
+        if not any(prompts):
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return jsonify({'error': 'At least one prompt is required'}), 400
+
+        maps_key = request.form.get('maps_key', '').strip()
+        gemini_key = request.form.get('gemini_key', '').strip()
+        if not maps_key:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return jsonify({'error': 'Google Maps API key is required'}), 400
+        if not gemini_key:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return jsonify({'error': 'Gemini API key is required'}), 400
+
+        input_mode = request.form.get('input_mode', 'csv')
+        csv_path = None
+        single_address = None
+        total_addresses = 1
+
+        if input_mode == 'single':
+            single_address = request.form.get('single_address', '').strip()
+            if not single_address:
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return jsonify({'error': 'Address is required'}), 400
+        else:
+            if 'csv_file' not in request.files or request.files['csv_file'].filename == '':
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return jsonify({'error': 'CSV file is required'}), 400
+            f = request.files['csv_file']
+            if not allowed_file(f.filename, ALLOWED_CSV):
+                shutil.rmtree(job_dir, ignore_errors=True)
+                return jsonify({'error': 'File must be a CSV'}), 400
+            csv_path = os.path.join(uploads_dir, secure_filename(f.filename))
+            f.save(csv_path)
+
+            try:
+                df = parse_csv(csv_path)
+                full_count = len(df)
+            except Exception:
+                full_count = 0
+
+            max_raw = request.form.get('max_addresses', '').strip()
+            try:
+                max_addresses = int(max_raw) if max_raw else None
+            except ValueError:
+                max_addresses = None
+            total_addresses = min(full_count, max_addresses) if max_addresses else full_count
+
+        analyze_jobs[job_id] = {
+            'status': 'queued',
+            'done': 0,
+            'total': total_addresses,
+            'current_address': '',
+            'message': '',
+            'results': None,
+            'job_dir': job_dir,
+            'finished_at': None,
+        }
+
+        params = {
+            'prompts': prompts,
+            'maps_key': maps_key,
+            'gemini_key': gemini_key,
+            'csv_path': csv_path,
+            'single_address': single_address,
+            'max_addresses': max_addresses if input_mode != 'single' else None,
+        }
+
+        thread = threading.Thread(target=_run_analysis_job, args=(job_id, params), daemon=True)
+        thread.start()
+
+        return jsonify({'job_id': job_id}), 202
+
+    except Exception as e:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/analyze/status/<job_id>')
+def analyze_status(job_id):
+    job = analyze_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify({
+        'status': job['status'],
+        'done': job['done'],
+        'total': job['total'],
+        'current_address': job.get('current_address', ''),
+        'message': job.get('message', ''),
+    })
+
+
+@app.route('/analyze/download/<job_id>')
+def analyze_download(job_id):
+    job = analyze_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if job['status'] != 'done':
+        return jsonify({'error': 'Job not finished yet'}), 400
+    if not job.get('results'):
+        return jsonify({'error': 'No results'}), 404
+
+    results = job['results']
+    if not results:
+        return jsonify({'error': 'No results'}), 404
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(results[0].keys()))
+    writer.writeheader()
+    writer.writerows(results)
+    csv_bytes = output.getvalue().encode('utf-8')
+
+    # Cleanup after download
+    shutil.rmtree(job.get('job_dir', ''), ignore_errors=True)
+    analyze_jobs.pop(job_id, None)
+
+    return Response(
+        csv_bytes,
+        mimetype='text/csv',
+        headers={'Content-Disposition': 'attachment; filename=property_analysis.csv'},
+    )
 
 
 if __name__ == '__main__':

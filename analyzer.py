@@ -15,6 +15,7 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
+GEMINI_MODEL = "gemini-1.5-flash"
 GREY_THRESHOLD_BYTES = 8_000
 
 SV_LABELS = [
@@ -86,6 +87,25 @@ def _parse_answers(text: str) -> dict:
     return answers
 
 
+def _gemini_with_retry(client, contents, max_retries: int = 3):
+    """Call Gemini, retrying on 429 with the delay from the error response."""
+    for attempt in range(max_retries):
+        try:
+            return client.models.generate_content(model=GEMINI_MODEL, contents=contents)
+        except Exception as e:
+            err = str(e)
+            if '429' in err or 'RESOURCE_EXHAUSTED' in err:
+                m = re.search(r'retry[^\d]*(\d+(?:\.\d+)?)\s*s', err, re.IGNORECASE)
+                delay = float(m.group(1)) + 5 if m else 35
+                if attempt < max_retries - 1:
+                    logger.warning("gemini_rate_limited", extra={"attempt": attempt + 1, "wait_s": delay})
+                    time.sleep(delay)
+                else:
+                    raise
+            else:
+                raise
+
+
 def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: str, enabled_prompts: list = None) -> dict:
     """
     1 Gemini call per address — only enabled prompts sent, disabled ones return 'Prompt not selected'.
@@ -134,7 +154,7 @@ def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: s
     contents.append(combined_prompt)
 
     logger.info("gemini_call_start", extra={"active_prompts": len(active), "images": len([x for x in contents if isinstance(x, types.Part)])})
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=contents)
+    response = _gemini_with_retry(client, contents)
     logger.info("gemini_call_done", extra={"response_len": len(response.text)})
 
     # Parse sequential answers and map back to original prompt positions

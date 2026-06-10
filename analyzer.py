@@ -15,7 +15,7 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-3.5-flash"
 GREY_THRESHOLD_BYTES = 8_000
 
 SV_LABELS = [

@@ -453,7 +453,11 @@ def lookup():
 
 @app.route('/analyzer')
 def analyzer():
-    return render_template('analyzer.html')
+    return render_template(
+        'analyzer.html',
+        default_maps_key=os.getenv('GOOGLE_MAPS_API_KEY', ''),
+        default_gemini_key=os.getenv('GEMINI_API_KEY', ''),
+    )
 
 
 def _run_analysis_job(job_id, params):

@@ -132,6 +132,61 @@
             font-size: 14px;
             font-weight: 600;
             color: #333;
+            flex: 1;
+        }
+
+        /* Prompt enable/disable toggle */
+        .prompt-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .prompt-toggle input[type="checkbox"] { display: none; }
+
+        .toggle-track {
+            width: 36px;
+            height: 20px;
+            background: #d1d5db;
+            border-radius: 999px;
+            position: relative;
+            transition: background 0.2s;
+            flex-shrink: 0;
+        }
+
+        .toggle-track::after {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: #fff;
+            border-radius: 50%;
+            top: 3px;
+            left: 3px;
+            transition: left 0.2s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+
+        .prompt-toggle input:checked + .toggle-track {
+            background: #2563eb;
+        }
+
+        .prompt-toggle input:checked + .toggle-track::after {
+            left: 19px;
+        }
+
+        .toggle-label {
+            font-size: 12px;
+            color: #888;
+            min-width: 28px;
+        }
+
+        .prompt-box.disabled textarea {
+            background: #f5f5f5;
+            color: #bbb;
+            pointer-events: none;
         }
 
         .mode-toggle {
@@ -364,33 +419,53 @@
             Be specific — e.g. <em>"Grade the roof 0-10 based on visible condition."</em>
         </p>
         <div class="prompts-grid">
-            <div class="prompt-box">
+            <div class="prompt-box" id="prompt-box-1">
                 <div class="prompt-label-row">
                     <span class="prompt-number">1</span>
                     <span class="prompt-label-text">Prompt 1</span>
+                    <label class="prompt-toggle" title="Enable this prompt">
+                        <input type="checkbox" name="prompt_1_enabled" checked onchange="togglePrompt(1, this)">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-label" id="toggle-label-1">On</span>
+                    </label>
                 </div>
-                <textarea name="prompt_1" required>Grade the windows according to age and condition from 0-10.</textarea>
+                <textarea name="prompt_1">Grade the windows according to age and condition from 0-10.</textarea>
             </div>
-            <div class="prompt-box">
+            <div class="prompt-box" id="prompt-box-2">
                 <div class="prompt-label-row">
                     <span class="prompt-number">2</span>
                     <span class="prompt-label-text">Prompt 2</span>
+                    <label class="prompt-toggle" title="Enable this prompt">
+                        <input type="checkbox" name="prompt_2_enabled" checked onchange="togglePrompt(2, this)">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-label" id="toggle-label-2">On</span>
+                    </label>
                 </div>
-                <textarea name="prompt_2" required>Grade the siding from 0-10 based on condition.</textarea>
+                <textarea name="prompt_2">Grade the siding from 0-10 based on condition.</textarea>
             </div>
-            <div class="prompt-box">
+            <div class="prompt-box" id="prompt-box-3">
                 <div class="prompt-label-row">
                     <span class="prompt-number">3</span>
                     <span class="prompt-label-text">Prompt 3</span>
+                    <label class="prompt-toggle" title="Enable this prompt">
+                        <input type="checkbox" name="prompt_3_enabled" checked onchange="togglePrompt(3, this)">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-label" id="toggle-label-3">On</span>
+                    </label>
                 </div>
-                <textarea name="prompt_3" required>Grade the roof from 0-10.</textarea>
+                <textarea name="prompt_3">Grade the roof from 0-10.</textarea>
             </div>
-            <div class="prompt-box">
+            <div class="prompt-box" id="prompt-box-4">
                 <div class="prompt-label-row">
                     <span class="prompt-number">4</span>
                     <span class="prompt-label-text">Prompt 4</span>
+                    <label class="prompt-toggle" title="Enable this prompt">
+                        <input type="checkbox" name="prompt_4_enabled" checked onchange="togglePrompt(4, this)">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-label" id="toggle-label-4">On</span>
+                    </label>
                 </div>
-                <textarea name="prompt_4" required>Grade the landscaping from 0-10.</textarea>
+                <textarea name="prompt_4">Grade the landscaping from 0-10.</textarea>
             </div>
         </div>
     </div>
@@ -484,6 +559,19 @@
 </form>
 
 <script>
+// Prompt enable/disable toggles
+function togglePrompt(num, checkbox) {
+    var box = document.getElementById('prompt-box-' + num);
+    var label = document.getElementById('toggle-label-' + num);
+    if (checkbox.checked) {
+        box.classList.remove('disabled');
+        label.textContent = 'On';
+    } else {
+        box.classList.add('disabled');
+        label.textContent = 'Off';
+    }
+}
+
 // Address count chips
 document.querySelectorAll('.count-chip').forEach(function(chip) {
     chip.addEventListener('click', function() {

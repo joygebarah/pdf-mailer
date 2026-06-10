@@ -472,6 +472,7 @@ def _run_analysis_job(job_id, params):
     try:
         results = run_full_analysis(
             prompts=params['prompts'],
+            enabled_prompts=params.get('enabled_prompts'),
             maps_key=params['maps_key'],
             gemini_key=params['gemini_key'],
             progress_cb=progress_cb,
@@ -507,9 +508,15 @@ def analyze():
             request.form.get('prompt_3', '').strip(),
             request.form.get('prompt_4', '').strip(),
         ]
-        if not any(prompts):
+        enabled_prompts = [
+            request.form.get('prompt_1_enabled') == 'on',
+            request.form.get('prompt_2_enabled') == 'on',
+            request.form.get('prompt_3_enabled') == 'on',
+            request.form.get('prompt_4_enabled') == 'on',
+        ]
+        if not any(enabled_prompts):
             shutil.rmtree(job_dir, ignore_errors=True)
-            return jsonify({'error': 'At least one prompt is required'}), 400
+            return jsonify({'error': 'At least one prompt must be enabled'}), 400
 
         maps_key = request.form.get('maps_key', '').strip()
         gemini_key = request.form.get('gemini_key', '').strip()
@@ -567,6 +574,7 @@ def analyze():
 
         params = {
             'prompts': prompts,
+            'enabled_prompts': enabled_prompts,
             'maps_key': maps_key,
             'gemini_key': gemini_key,
             'csv_path': csv_path,

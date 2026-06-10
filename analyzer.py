@@ -86,41 +86,64 @@ def _parse_answers(text: str) -> dict:
     return answers
 
 
-def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: str) -> dict:
-    """1 Gemini call per address — all 4 prompts bundled, 4 answers returned."""
-    client = genai.Client(api_key=gemini_key)
+def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: str, enabled_prompts: list = None) -> dict:
+    """
+    1 Gemini call per address — only enabled prompts sent, disabled ones return 'Prompt not selected'.
+    enabled_prompts: list of 4 booleans; defaults to all True if not provided.
+    """
+    if enabled_prompts is None:
+        enabled_prompts = [True] * 4
 
     prompts = (list(prompts) + [''] * 4)[:4]
+    enabled_prompts = (list(enabled_prompts) + [True] * 4)[:4]
+
+    # Build answers dict — pre-fill disabled prompts
+    answers = {}
+    for i in range(4):
+        if not enabled_prompts[i]:
+            answers[f'Prompt_{i+1}_Response'] = 'Prompt not selected'
+
+    active = [(i, prompts[i]) for i in range(4) if enabled_prompts[i]]
+    if not active:
+        return answers
+
+    client = genai.Client(api_key=gemini_key)
 
     contents = []
     for i, img in enumerate(sv_images[:3]):
         contents.append(SV_LABELS[i])
         contents.append(_to_part(img))
-
     if sat_image:
         contents.append(
             "IMAGE 4 — Satellite aerial view (zoom 18): top-down view of the property lot, roof, driveway, and surrounding homes."
         )
         contents.append(_to_part(sat_image))
 
+    # Number the active prompts 1..N in the Gemini request
     combined_prompt = (
         "You are analyzing a residential property using the provided street view and satellite images.\n"
         "Answer each of the following prompts separately and concisely.\n"
         "Return ONLY in this exact format:\n\n"
-        "ANSWER_1: [your answer]\n"
-        "ANSWER_2: [your answer]\n"
-        "ANSWER_3: [your answer]\n"
-        "ANSWER_4: [your answer]\n\n"
     )
-    for idx, p in enumerate(prompts, 1):
-        combined_prompt += f"PROMPT {idx}: {p}\n"
+    for seq, (_, p) in enumerate(active, 1):
+        combined_prompt += f"ANSWER_{seq}: [your answer]\n"
+    combined_prompt += "\n"
+    for seq, (_, p) in enumerate(active, 1):
+        combined_prompt += f"PROMPT {seq}: {p}\n"
 
     contents.append(combined_prompt)
 
-    logger.info("gemini_call_start", extra={"images": len([x for x in contents if isinstance(x, types.Part)])})
+    logger.info("gemini_call_start", extra={"active_prompts": len(active), "images": len([x for x in contents if isinstance(x, types.Part)])})
     response = client.models.generate_content(model="gemini-2.0-flash", contents=contents)
     logger.info("gemini_call_done", extra={"response_len": len(response.text)})
-    return _parse_answers(response.text)
+
+    # Parse sequential answers and map back to original prompt positions
+    raw = response.text
+    for seq, (orig_idx, _) in enumerate(active, 1):
+        m = re.search(rf'ANSWER_{seq}:\s*(.+?)(?=\nANSWER_{seq+1}:|$)', raw, re.DOTALL | re.IGNORECASE)
+        answers[f'Prompt_{orig_idx+1}_Response'] = m.group(1).strip() if m else 'No response'
+
+    return answers
 
 
 def build_full_address(row) -> str:
@@ -146,6 +169,7 @@ def run_full_analysis(
     csv_path: str = None,
     single_address: str = None,
     max_addresses: int = None,
+    enabled_prompts: list = None,
 ) -> list:
     """
     Main analysis runner. Returns list of row dicts with original columns
@@ -185,7 +209,7 @@ def run_full_analysis(
             answers = {f'Prompt_{i}_Response': 'No images available for this address' for i in range(1, 5)}
         else:
             try:
-                answers = analyze_with_gemini(sv_images, sat, prompts, gemini_key)
+                answers = analyze_with_gemini(sv_images, sat, prompts, gemini_key, enabled_prompts)
             except Exception as e:
                 logger.error("gemini_analysis_error", extra={"address": address, "error": str(e)})
                 answers = {f'Prompt_{i}_Response': f'Error: {str(e)}' for i in range(1, 5)}

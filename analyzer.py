@@ -11,6 +11,7 @@ import re
 import time
 import traceback
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from google.genai import types
 
@@ -154,14 +155,14 @@ def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: s
 
     # Number the active prompts 1..N in the Gemini request
     combined_prompt = (
-        "You are analyzing a residential property using the provided street view and satellite images.\n"
-        "Answer each prompt with detailed, specific observations from the images.\n"
-        "Mention materials, colors, visible condition, defects, and notable features you can see.\n"
-        "For grading prompts, state the grade and then explain your reasoning with 2-3 sentences of specific visual evidence.\n"
-        "Return ONLY in this exact format:\n\n"
+        "You are a real estate analyst examining this property through street view and satellite images.\n\n"
+        "Answer each prompt. For grading prompts, give the grade (e.g. 7/10) then write "
+        "3-4 sentences of specific visual evidence that justifies the grade — "
+        "name the materials, colors, visible damage, weathering, or standout features you actually see.\n\n"
+        "Return ONLY this format:\n\n"
     )
     for seq, (_, p) in enumerate(active, 1):
-        combined_prompt += f"ANSWER_{seq}: [your answer]\n"
+        combined_prompt += f"ANSWER_{seq}: [grade and detailed visual explanation]\n"
     combined_prompt += "\n"
     for seq, (_, p) in enumerate(active, 1):
         combined_prompt += f"PROMPT {seq}: {p}\n"
@@ -230,15 +231,17 @@ def run_full_analysis(
 
         _log("INFO", f"--- Address {idx + 1}/{total}: {address} ---")
 
-        sv_images = []
-        for fov, pitch in angles:
-            img = fetch_street_view(address, maps_key, fov=fov, pitch=pitch)
-            if img:
-                sv_images.append(img)
+        # Fetch all 4 images in parallel (3 Street View angles + satellite)
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            sv_futures = [
+                ex.submit(fetch_street_view, address, maps_key, fov=fov, pitch=pitch)
+                for fov, pitch in angles
+            ]
+            sat_future = ex.submit(fetch_satellite, address, maps_key)
+            sv_images = [img for img in (f.result() for f in sv_futures) if img]
+            sat = sat_future.result()
 
-        sat = fetch_satellite(address, maps_key)
         street_view_available = len(sv_images) > 0
-
         _log("INFO", f"Street View images fetched: {len(sv_images)}/3  Satellite: {'YES' if sat else 'NO'}")
 
         if not sv_images and not sat:

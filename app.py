@@ -26,6 +26,10 @@ if sys.platform == 'win32' and os.path.exists(MSYS2_BIN_PATH):
 from mailer_generator import generate_mailers
 from analyzer import run_full_analysis, parse_csv
 
+# Suppress Flask's access log spam from JS status polling every 2s
+import logging
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
 # Load environment variables
 load_dotenv()
 

@@ -8,15 +8,18 @@ returns a dict with Prompt_1_Response ... Prompt_4_Response.
 
 import re
 import time
-import logging
+import traceback
 import requests
 from google import genai
 from google.genai import types
 
-logger = logging.getLogger(__name__)
-
 GEMINI_MODEL = "gemini-3.5-flash"
 GREY_THRESHOLD_BYTES = 8_000
+
+
+def _log(level, msg):
+    import sys
+    print(f"[ANALYZER:{level}] {msg}", file=sys.stderr, flush=True)
 
 SV_LABELS = [
     "IMAGE 1 — Street View WIDE (FOV 120°): full street context and neighbourhood around the property.",
@@ -41,11 +44,13 @@ def fetch_street_view(address: str, maps_key: str, fov: int = 90, pitch: int = 0
         )
         if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("image"):
             if len(r.content) < GREY_THRESHOLD_BYTES:
-                logger.info("street_view_grey_placeholder", extra={"address": address, "fov": fov})
+                _log("INFO", f"street_view grey placeholder fov={fov} addr={address}")
                 return None
             return r.content
+        else:
+            _log("WARN", f"street_view bad status={r.status_code} fov={fov} addr={address}")
     except Exception as e:
-        logger.warning("street_view_fetch_error", extra={"address": address, "error": str(e)})
+        _log("ERROR", f"street_view fetch failed fov={fov} addr={address} error={e}")
     return None
 
 
@@ -66,8 +71,10 @@ def fetch_satellite(address: str, maps_key: str, zoom: int = 18):
         )
         if r.status_code == 200 and r.headers.get("Content-Type", "").startswith("image"):
             return r.content
+        else:
+            _log("WARN", f"satellite bad status={r.status_code} addr={address}")
     except Exception as e:
-        logger.warning("satellite_fetch_error", extra={"address": address, "error": str(e)})
+        _log("ERROR", f"satellite fetch failed addr={address} error={e}")
     return None
 
 
@@ -90,17 +97,22 @@ def _parse_answers(text: str) -> dict:
 def _gemini_with_retry(client, contents, max_retries: int = 3):
     """Call Gemini, retrying on 429 with the delay from the error response."""
     for attempt in range(max_retries):
+        _log("INFO", f"Gemini call model={GEMINI_MODEL} attempt={attempt + 1}/{max_retries}")
         try:
-            return client.models.generate_content(model=GEMINI_MODEL, contents=contents)
+            response = client.models.generate_content(model=GEMINI_MODEL, contents=contents)
+            _log("INFO", f"Gemini call SUCCESS response_len={len(response.text)}")
+            return response
         except Exception as e:
             err = str(e)
+            _log("ERROR", f"Gemini call FAILED attempt={attempt + 1} error={err[:300]}")
             if '429' in err or 'RESOURCE_EXHAUSTED' in err:
                 m = re.search(r'retry[^\d]*(\d+(?:\.\d+)?)\s*s', err, re.IGNORECASE)
                 delay = float(m.group(1)) + 5 if m else 35
                 if attempt < max_retries - 1:
-                    logger.warning("gemini_rate_limited", extra={"attempt": attempt + 1, "wait_s": delay})
+                    _log("WARN", f"Rate limited — waiting {delay}s before retry")
                     time.sleep(delay)
                 else:
+                    _log("ERROR", "Rate limit hit on final attempt — giving up")
                     raise
             else:
                 raise
@@ -153,9 +165,8 @@ def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: s
 
     contents.append(combined_prompt)
 
-    logger.info("gemini_call_start", extra={"active_prompts": len(active), "images": len([x for x in contents if isinstance(x, types.Part)])})
+    _log("INFO", f"Sending {len(active)} prompts + {len([x for x in contents if isinstance(x, types.Part)])} images to Gemini")
     response = _gemini_with_retry(client, contents)
-    logger.info("gemini_call_done", extra={"response_len": len(response.text)})
 
     # Parse sequential answers and map back to original prompt positions
     raw = response.text
@@ -213,7 +224,7 @@ def run_full_analysis(
         if progress_cb:
             progress_cb(idx, total, address)
 
-        logger.info("analyzing_address", extra={"idx": idx + 1, "total": total, "address": address})
+        _log("INFO", f"--- Address {idx + 1}/{total}: {address} ---")
 
         sv_images = []
         for fov, pitch in angles:
@@ -224,14 +235,16 @@ def run_full_analysis(
         sat = fetch_satellite(address, maps_key)
         street_view_available = len(sv_images) > 0
 
+        _log("INFO", f"Street View images fetched: {len(sv_images)}/3  Satellite: {'YES' if sat else 'NO'}")
+
         if not sv_images and not sat:
-            logger.warning("no_images_for_address", extra={"address": address})
+            _log("WARN", f"No images at all for {address} — skipping Gemini call")
             answers = {f'Prompt_{i}_Response': 'No images available for this address' for i in range(1, 5)}
         else:
             try:
                 answers = analyze_with_gemini(sv_images, sat, prompts, gemini_key, enabled_prompts)
             except Exception as e:
-                logger.error("gemini_analysis_error", extra={"address": address, "error": str(e)})
+                _log("ERROR", f"Gemini analysis FAILED for {address}\n{traceback.format_exc()}")
                 answers = {f'Prompt_{i}_Response': f'Error: {str(e)}' for i in range(1, 5)}
 
         result_row = dict(row)

@@ -7,21 +7,51 @@ returns a dict with Prompt_1_Response ... Prompt_4_Response.
 """
 
 import base64
+import os
 import re
+import threading
 import time
 import traceback
 import requests
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from google import genai
 from google.genai import types
 
 GEMINI_MODEL = "gemini-3.5-flash"
 GREY_THRESHOLD_BYTES = 8_000
 
+# ── Concurrency config (env-overridable so a paid tier can scale up without code changes) ──
+# Free tier defaults: ~10-15 req/min and deprioritized, so keep these low.
+# After upgrading to a paid Gemini tier, bump these in Railway env vars, e.g.:
+#   ANALYZER_CONCURRENCY=10   ANALYZER_GEMINI_RPM=300
+MAX_CONCURRENT = int(os.getenv('ANALYZER_CONCURRENCY', '3'))
+GEMINI_RPM = int(os.getenv('ANALYZER_GEMINI_RPM', '12'))
+
 
 def _log(level, msg):
     import sys
     print(f"[ANALYZER:{level}] {msg}", file=sys.stderr, flush=True)
+
+
+class _RateLimiter:
+    """Thread-safe limiter that spaces out call *starts* to stay under a req/min cap.
+    Each acquire() reserves the next evenly-spaced slot, then sleeps until it arrives."""
+
+    def __init__(self, rpm: int):
+        self.min_interval = 60.0 / rpm if rpm and rpm > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next_slot = 0.0
+
+    def acquire(self):
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next_slot)
+            self._next_slot = slot + self.min_interval
+        wait = slot - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
 
 SV_LABELS = [
     "IMAGE 1 — Street View WIDE (FOV 120°): full street context and neighbourhood around the property.",
@@ -120,7 +150,7 @@ def _gemini_with_retry(client, contents, max_retries: int = 3):
                 raise
 
 
-def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: str, enabled_prompts: list = None) -> dict:
+def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: str, enabled_prompts: list = None, rate_limiter=None) -> dict:
     """
     1 Gemini call per address — only enabled prompts sent, disabled ones return 'Prompt not selected'.
     enabled_prompts: list of 4 booleans; defaults to all True if not provided.
@@ -170,6 +200,8 @@ def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: s
     contents.append(combined_prompt)
 
     _log("INFO", f"Sending {len(active)} prompts + {len([x for x in contents if isinstance(x, types.Part)])} images to Gemini")
+    if rate_limiter is not None:
+        rate_limiter.acquire()
     response = _gemini_with_retry(client, contents)
 
     # Parse sequential answers and map back to original prompt positions
@@ -222,13 +254,15 @@ def run_full_analysis(
         addresses = [build_full_address(r) for r in rows]
 
     total = len(addresses)
-    results = []
     angles = [(120, 0), (90, 0), (50, 10)]
+    rate_limiter = _RateLimiter(GEMINI_RPM)
 
-    for idx, (row, address) in enumerate(zip(rows, addresses)):
-        if progress_cb:
-            progress_cb(idx, total, address)
+    # Process several addresses at once; Gemini calls are spaced by the rate limiter
+    # so we never exceed the tier's req/min cap regardless of worker count.
+    workers = max(1, min(MAX_CONCURRENT, total))
+    _log("INFO", f"Starting analysis: {total} addresses, {workers} concurrent workers, {GEMINI_RPM} RPM cap")
 
+    def _process_one(idx: int, row, address: str) -> dict:
         _log("INFO", f"--- Address {idx + 1}/{total}: {address} ---")
 
         # Fetch all 4 images in parallel (3 Street View angles + satellite)
@@ -242,14 +276,14 @@ def run_full_analysis(
             sat = sat_future.result()
 
         street_view_available = len(sv_images) > 0
-        _log("INFO", f"Street View images fetched: {len(sv_images)}/3  Satellite: {'YES' if sat else 'NO'}")
+        _log("INFO", f"[{idx + 1}/{total}] Images: {len(sv_images)}/3 SV  Satellite: {'YES' if sat else 'NO'}")
 
         if not sv_images and not sat:
             _log("WARN", f"No images at all for {address} — skipping Gemini call")
             answers = {f'Prompt_{i}_Response': 'No images available for this address' for i in range(1, 5)}
         else:
             try:
-                answers = analyze_with_gemini(sv_images, sat, prompts, gemini_key, enabled_prompts)
+                answers = analyze_with_gemini(sv_images, sat, prompts, gemini_key, enabled_prompts, rate_limiter=rate_limiter)
             except Exception as e:
                 _log("ERROR", f"Gemini analysis FAILED for {address}\n{traceback.format_exc()}")
                 answers = {f'Prompt_{i}_Response': f'Error: {str(e)}' for i in range(1, 5)}
@@ -260,11 +294,37 @@ def run_full_analysis(
         if return_images:
             result_row['_sv_images'] = [base64.b64encode(img).decode() for img in sv_images]
             result_row['_sat_image'] = base64.b64encode(sat).decode() if sat else None
-        results.append(result_row)
+        return result_row
 
-        # Free tier: 10 RPM → 6s sleep between addresses
-        if idx < total - 1:
-            time.sleep(6)
+    # Pre-allocate so results stay in the original CSV order regardless of finish order
+    results = [None] * total
+    done_count = 0
+    done_lock = threading.Lock()
+
+    if progress_cb:
+        progress_cb(0, total, addresses[0] if addresses else '')
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_idx = {
+            pool.submit(_process_one, idx, row, address): idx
+            for idx, (row, address) in enumerate(zip(rows, addresses))
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except Exception as e:
+                _log("ERROR", f"Address {idx + 1} crashed\n{traceback.format_exc()}")
+                row = rows[idx]
+                err_row = dict(row)
+                err_row.update({f'Prompt_{i}_Response': f'Error: {str(e)}' for i in range(1, 5)})
+                err_row['Street_View_Available'] = 'No'
+                results[idx] = err_row
+            with done_lock:
+                done_count += 1
+                done_now = done_count
+            if progress_cb:
+                progress_cb(done_now, total, addresses[idx])
 
     if progress_cb:
         progress_cb(total, total, 'Done')

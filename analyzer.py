@@ -25,7 +25,7 @@ GREY_THRESHOLD_BYTES = 8_000
 # After upgrading to a paid Gemini tier, bump these in Railway env vars, e.g.:
 #   ANALYZER_CONCURRENCY=10   ANALYZER_GEMINI_RPM=300
 MAX_CONCURRENT = int(os.getenv('ANALYZER_CONCURRENCY', '3'))
-GEMINI_RPM = int(os.getenv('ANALYZER_GEMINI_RPM', '12'))
+GEMINI_RPM = int(os.getenv('ANALYZER_GEMINI_RPM', '10'))  # free tier flash = 10 RPM, paid Tier 1 = 300 RPM
 
 
 def _log(level, msg):
@@ -126,8 +126,8 @@ def _parse_answers(text: str) -> dict:
     return answers
 
 
-def _gemini_with_retry(client, contents, max_retries: int = 3):
-    """Call Gemini, retrying on 429 with the delay from the error response."""
+def _gemini_with_retry(client, contents, max_retries: int = 4):
+    """Call Gemini, retrying on 429 (rate limit) and 503 (server overload)."""
     for attempt in range(max_retries):
         _log("INFO", f"Gemini call model={GEMINI_MODEL} attempt={attempt + 1}/{max_retries}")
         try:
@@ -137,16 +137,26 @@ def _gemini_with_retry(client, contents, max_retries: int = 3):
         except Exception as e:
             err = str(e)
             _log("ERROR", f"Gemini call FAILED attempt={attempt + 1} error={err[:300]}")
-            if '429' in err or 'RESOURCE_EXHAUSTED' in err:
+
+            is_rate_limit = '429' in err or 'RESOURCE_EXHAUSTED' in err
+            is_overload = '503' in err or 'UNAVAILABLE' in err
+
+            if is_rate_limit:
                 m = re.search(r'retry[^\d]*(\d+(?:\.\d+)?)\s*s', err, re.IGNORECASE)
                 delay = float(m.group(1)) + 5 if m else 35
-                if attempt < max_retries - 1:
-                    _log("WARN", f"Rate limited — waiting {delay}s before retry")
-                    time.sleep(delay)
-                else:
-                    _log("ERROR", "Rate limit hit on final attempt — giving up")
-                    raise
+                reason = "Rate limited"
+            elif is_overload:
+                # Exponential backoff: 10s, 20s, 40s
+                delay = 10 * (2 ** attempt)
+                reason = "Server overload (503)"
             else:
+                raise  # non-retryable error, fail immediately
+
+            if attempt < max_retries - 1:
+                _log("WARN", f"{reason} — waiting {delay:.0f}s before retry")
+                time.sleep(delay)
+            else:
+                _log("ERROR", f"{reason} on final attempt — giving up")
                 raise
 
 

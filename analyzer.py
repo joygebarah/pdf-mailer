@@ -138,8 +138,16 @@ def _gemini_with_retry(client, contents, max_retries: int = 4):
             err = str(e)
             _log("ERROR", f"Gemini call FAILED attempt={attempt + 1} error={err[:300]}")
 
-            is_rate_limit = '429' in err or 'RESOURCE_EXHAUSTED' in err
+            is_depleted = 'credits are depleted' in err or 'prepayment' in err.lower()
+            is_rate_limit = ('429' in err or 'RESOURCE_EXHAUSTED' in err) and not is_depleted
             is_overload = '503' in err or 'UNAVAILABLE' in err
+
+            if is_depleted:
+                _log("ERROR", "Gemini credits depleted — aborting without retry")
+                raise Exception(
+                    "CREDITS_DEPLETED: Your Gemini prepayment credits are depleted. "
+                    "Top up your balance at https://aistudio.google.com/projects to continue."
+                )
 
             if is_rate_limit:
                 m = re.search(r'retry[^\d]*(\d+(?:\.\d+)?)\s*s', err, re.IGNORECASE)

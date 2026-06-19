@@ -327,6 +327,30 @@
             margin-bottom: 14px;
         }
 
+        .credits-error-box {
+            background: #fff7ed;
+            border: 1px solid #fed7aa;
+            border-radius: 8px;
+            padding: 16px 20px;
+            display: none;
+            margin-bottom: 14px;
+        }
+
+        .credits-error-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #9a3412;
+            margin-bottom: 6px;
+        }
+
+        .credits-error-body {
+            font-size: 14px;
+            color: #7c2d12;
+            line-height: 1.55;
+        }
+
+        .credits-error-body a { color: #ea580c; font-weight: 600; }
+
         hr { border: none; border-top: 1px solid #eee; margin: 20px 0; }
 
         .key-note {
@@ -608,6 +632,16 @@
     <div class="card">
         <div id="error-box" class="error-box"></div>
 
+        <div id="credits-error-box" class="credits-error-box">
+            <div class="credits-error-title">⚠️ Gemini Credits Depleted</div>
+            <div class="credits-error-body">
+                Your Gemini prepayment balance has run out. To continue analyzing properties:<br><br>
+                1. Go to <a href="https://aistudio.google.com/projects" target="_blank">aistudio.google.com/projects</a><br>
+                2. Select your project and top up your billing balance<br>
+                3. Come back here and run the analysis again
+            </div>
+        </div>
+
         <button type="submit" class="submit-btn" id="submit-btn">Run Analysis</button>
 
         <div id="progress-section">
@@ -719,9 +753,18 @@ document.getElementById('analyzer-form').addEventListener('submit', function(e) 
 });
 
 function showError(msg) {
+    document.getElementById('credits-error-box').style.display = 'none';
     var box = document.getElementById('error-box');
     box.textContent = msg;
     box.style.display = 'block';
+    document.getElementById('submit-btn').disabled = false;
+    document.getElementById('submit-btn').textContent = 'Run Analysis';
+    document.getElementById('progress-section').style.display = 'none';
+}
+
+function showCreditsError() {
+    document.getElementById('error-box').style.display = 'none';
+    document.getElementById('credits-error-box').style.display = 'block';
     document.getElementById('submit-btn').disabled = false;
     document.getElementById('submit-btn').textContent = 'Run Analysis';
     document.getElementById('progress-section').style.display = 'none';
@@ -758,15 +801,29 @@ function pollJob(jobId) {
                             .catch(function(err) { showError('Could not load result: ' + err.message); });
                     } else {
                         document.getElementById('success-msg').textContent =
-                            'Analysis complete — ' + data.total + ' properties processed.';
+                            'Analysis complete — ' + data.total + ' properties processed. Download starting…';
                         document.getElementById('download-link').href = '/analyze/download/' + jobId;
+                        document.getElementById('download-link').textContent = '⬇ Download CSV (click if it didn\'t start)';
                         document.getElementById('result-section').style.display = 'block';
+
+                        // Auto-trigger the download immediately so Joy doesn't have to come back
+                        var a = document.createElement('a');
+                        a.href = '/analyze/download/' + jobId;
+                        a.download = 'property_analysis.csv';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
                     }
                 }
 
                 if (data.status === 'failed') {
                     clearInterval(interval);
-                    showError(data.message || 'Analysis failed.');
+                    var msg = data.message || 'Analysis failed.';
+                    if (msg.indexOf('CREDITS_DEPLETED') !== -1) {
+                        showCreditsError();
+                    } else {
+                        showError(msg);
+                    }
                 }
             })
             .catch(function() { /* keep polling on network hiccup */ });

@@ -196,13 +196,11 @@ def analyze_with_gemini(sv_images: list, sat_image, prompts: list, gemini_key: s
     # Number the active prompts 1..N in the Gemini request
     combined_prompt = (
         "You are a real estate analyst examining this property through street view and satellite images.\n\n"
-        "Answer each prompt. For grading prompts, give the grade (e.g. 7/10) then write "
-        "3-4 sentences of specific visual evidence that justifies the grade — "
-        "name the materials, colors, visible damage, weathering, or standout features you actually see.\n\n"
+        "Answer each prompt below. Follow each prompt's instructions exactly — do not add anything the prompt does not ask for.\n\n"
         "Return ONLY this format:\n\n"
     )
     for seq, (_, p) in enumerate(active, 1):
-        combined_prompt += f"ANSWER_{seq}: [grade and detailed visual explanation]\n"
+        combined_prompt += f"ANSWER_{seq}: [your answer]\n"
     combined_prompt += "\n"
     for seq, (_, p) in enumerate(active, 1):
         combined_prompt += f"PROMPT {seq}: {p}\n"

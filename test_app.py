@@ -42,15 +42,17 @@ def upload_sold():
         return requests.post(f"{BASE}/upload-sold",
                              files={"sold_csv": ("sold.csv", f, "text/csv")})
 
-def submit_generate(num_clients=2, sqft_pct=None, age_years=None, beds_diff=None, use_saved=False):
+def submit_generate(num_clients=2, sqft_pct=None, age_years=None, beds_diff=None, use_saved=False,
+                     layout=None, num_nearby=3):
     files = {"client_csv": ("clients.csv", open(CLIENT_CSV, "rb"), "text/csv")}
     if not use_saved:
         files["sold_csv"] = ("sold.csv", open(SOLD_CSV, "rb"), "text/csv")
-    data = {"num_clients": str(num_clients), "num_nearby": "3"}
+    data = {"num_clients": str(num_clients), "num_nearby": str(num_nearby)}
     if use_saved:  data["use_saved_sold"] = "on"
     if sqft_pct:   data["sqft_pct"]  = str(sqft_pct)
     if age_years:  data["age_years"] = str(age_years)
     if beds_diff:  data["beds_diff"] = str(beds_diff)
+    if layout:     data["layout"]    = layout
     return requests.post(f"{BASE}/generate", files=files, data=data)
 
 def poll_job(job_id, timeout=120):
@@ -194,6 +196,65 @@ def test_sold_status_wrong_method():
     r = requests.post(f"{BASE}/sold-status")
     check("Returns 405", r.status_code == 405)
 
+def test_generate_two_up():
+    print("\n[15] 2-Up A4 layout — 3 clients (odd count), 7 nearby sales")
+    r = submit_generate(num_clients=3, num_nearby=7, layout="two_up")
+    check("Returns 202", r.status_code == 202, r.text[:120] if r.status_code != 202 else "")
+    d = r.json()
+    if "job_id" not in d:
+        check("job_id present", False); return None
+    result = poll_job(d["job_id"])
+    check("Status = done",         result["status"] == "done", f"status={result['status']} msg={result.get('message','')}")
+    check("3 clients -> 2 sheets", result.get("pdf_count") == 2, f"got {result.get('pdf_count')}")
+    return d["job_id"]
+
+def test_two_up_page_size(job_id):
+    print("\n[16] 2-Up PDF pages are A4 (8.27in x 11.69in)")
+    if not job_id:
+        check("Skipped — no job_id", False); return
+    r = requests.get(f"{BASE}/download/{job_id}")
+    check("Returns 200", r.status_code == 200)
+    tmp = tempfile.mktemp(suffix=".zip")
+    with open(tmp, "wb") as f:
+        f.write(r.content)
+    with zipfile.ZipFile(tmp) as z:
+        names = z.namelist()
+        merged_name = next((n for n in names if "final_mailers_2up" in n), None)
+        check("final_mailers_2up.pdf exists", merged_name is not None, str(names))
+        if merged_name:
+            from pypdf import PdfReader
+            pdf_bytes = z.read(merged_name)
+            pdf_tmp = tempfile.mktemp(suffix=".pdf")
+            with open(pdf_tmp, "wb") as pf:
+                pf.write(pdf_bytes)
+            reader = PdfReader(pdf_tmp)
+            sizes_ok = all(
+                abs(float(p.mediabox.width) / 72 - 8.27) < 0.05 and
+                abs(float(p.mediabox.height) / 72 - 11.69) < 0.05
+                for p in reader.pages
+            )
+            check("All pages are 8.27in x 11.69in", sizes_ok)
+            os.unlink(pdf_tmp)
+    os.unlink(tmp)
+
+def test_generate_two_up_regression_trifold_still_default():
+    print("\n[17] Regression — omitting layout still defaults to tri-fold (8.5in x 11in)")
+    r = submit_generate(num_clients=1)  # no layout passed
+    check("Returns 202", r.status_code == 202)
+    d = r.json()
+    if "job_id" not in d:
+        check("job_id present", False); return
+    result = poll_job(d["job_id"])
+    check("Status = done", result["status"] == "done", result.get("message", ""))
+    r2 = requests.get(f"{BASE}/download/{d['job_id']}")
+    tmp = tempfile.mktemp(suffix=".zip")
+    with open(tmp, "wb") as f:
+        f.write(r2.content)
+    with zipfile.ZipFile(tmp) as z:
+        names = z.namelist()
+        check("final_mailers_trifold.pdf exists", any("final_mailers_trifold" in n for n in names), str(names))
+    os.unlink(tmp)
+
 # ── runner ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -220,6 +281,9 @@ if __name__ == "__main__":
     test_generate_with_filters()
     test_generate_missing_csv()
     test_sold_status_wrong_method()
+    two_up_job_id = test_generate_two_up()
+    test_two_up_page_size(two_up_job_id)
+    test_generate_two_up_regression_trifold_still_default()
 
     passed = sum(results)
     total  = len(results)

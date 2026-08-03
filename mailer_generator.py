@@ -7,6 +7,7 @@ Uses persistent geocoding cache (geocoding_cache_mapbox.json)
 import pandas as pd
 import os
 import json
+import logging
 import threading
 import requests
 import base64
@@ -15,12 +16,47 @@ from jinja2 import Template
 from pypdf import PdfWriter
 from weasyprint import HTML
 
+logger = logging.getLogger(__name__)
+
 
 # Thread-safe lock for cache file writes
 _cache_lock = threading.Lock()
 
 # Persistent cache path (lives next to this module so it persists across jobs)
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'geocoding_cache_mapbox.json')
+
+
+# --- 2-UP A4 LAYOUT CONSTANTS ---------------------------------------------
+# All physical dimensions for the 2-up layout live here so USPS sizing
+# changes are a one-line edit. Joy is still confirming ADDRESS_SIDE_PCT
+# with his Post Office as of 2026-07-30.
+
+SHEET_W_IN         = 8.27    # A4 width
+SHEET_H_IN         = 11.69   # A4 height
+MAILER_H_IN        = 5.845   # SHEET_H_IN / 2
+
+ADDRESS_SIDE_PCT   = 33.33   # right panel width, % of sheet  <-- USPS may change this
+CONTENT_SIDE_PCT   = 66.66   # left panel width, % of sheet   <-- and this (must sum to ~100)
+
+PANEL_PAD_IN       = 0.2     # inner padding on both panels
+MAP_H_IN           = 2.60    # fixed map height (Joy: "33% smaller")
+INDICIA_SIZE_IN    = 1.0     # Joy confirmed exactly 1in x 1in
+INDICIA_OFFSET_IN  = 0.2     # distance from top and right edge
+
+BRAND_BOX_BG       = '#2E72F9'   # Joy-specified box colour
+BRAND_BOX_TEXT     = '#D2F249'   # Joy-specified text-inside-box colour
+
+# Mapbox static image, sized to the map box ratio so object-fit:cover
+# never crops the pins. See plan section 4.2.
+_MAP_W_IN          = SHEET_W_IN * (CONTENT_SIDE_PCT / 100) - (PANEL_PAD_IN * 2)
+MAP_REQ_W_PX       = 500
+MAP_REQ_H_PX       = round(MAP_REQ_W_PX * (MAP_H_IN / _MAP_W_IN))
+
+# Table switches to the compact style at this many rows or more
+COMPACT_TABLE_THRESHOLD = 5
+
+# Indicia PNG lives in static/ so it ships with the Docker image (COPY . .)
+INDICIA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'usps_indicia.png')
 
 
 # --- TRI-FOLD TEMPLATE (8.5" x 11" Letter) ---
@@ -380,6 +416,193 @@ HTML_TEMPLATE = """
 """
 
 
+# --- 2-UP A4 TEMPLATE (two mailers per A4 sheet, cut in half) ---
+# Approved mockup: mockup_two_up_a4.html (client sign-off 2026-07-30)
+# Dimensions and colours come from the constants block above, not hardcoded here
+# except where WeasyPrint's Jinja2 render needs a literal (see generate_mailers()).
+TWO_UP_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @page {
+            size: 8.27in 11.69in;
+            margin: 0;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Arial', 'Helvetica', sans-serif;
+            background: #ffffff;
+            color: #000;
+        }
+
+        .mailer {
+            width: 8.27in;
+            height: 5.845in;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* LEFT 2/3: Recent Sales + Map */
+        .content-side {
+            width: 66.66%;
+            padding: 0.2in;
+            display: flex;
+            flex-direction: column;
+        }
+        .mini-header {
+            background: {{ brand_bg }};
+            color: {{ brand_text }};
+            padding: 6px 12px;
+            text-align: center;
+            font-size: 10px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            border-radius: 4px;
+            margin-bottom: 0.12in;
+        }
+        .section-title {
+            font-size: 8.5pt;
+            color: #8B4513;
+            font-weight: bold;
+            padding-bottom: 3px;
+            border-bottom: 1.5px solid #D4AF37;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+        .property-table {
+            font-size: 7pt;
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 0.1in;
+        }
+        .property-table th {
+            background: {{ brand_bg }};
+            color: {{ brand_text }};
+            padding: 3px 5px;
+            text-align: left;
+            font-weight: bold;
+        }
+        .property-table td {
+            padding: 3px 5px;
+            border-bottom: 1px solid #eee;
+            color: #000;
+            font-weight: bold;
+        }
+        .property-table tr:nth-child(even) { background: #f9f9f9; }
+        .property-table td.price-cell { color: #27ae60; font-weight: bold; }
+        .property-table--compact { font-size: 6.3pt; }
+        .property-table--compact th,
+        .property-table--compact td { padding: 1.5px 5px; }
+
+        .map-box {
+            height: {{ map_h_in }}in;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 2px solid #D4AF37;
+            background: #eef3ee;
+        }
+        .map-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .map-legend {
+            font-size: 6.5pt;
+            color: #666;
+            text-align: center;
+            margin-top: 3px;
+        }
+        .legend-red { color: #c0392b; font-weight: bold; }
+        .legend-green { color: #27ae60; font-weight: bold; }
+        /* Freed space from the smaller map - print-safety margin near the cut line */
+        .map-spacer { flex: 1; }
+
+        /* RIGHT 1/3: Name + Mailing Address */
+        .address-side {
+            width: 33.33%;
+            padding: 0.2in;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        .stamp-box {
+            position: absolute;
+            top: 0.2in;
+            right: 0.2in;
+            width: 1in;
+            height: 1in;
+        }
+        .stamp-box img { width: 100%; height: 100%; display: block; }
+        .address-block {
+            /* Fixed offset, not margin-top:auto - WeasyPrint doesn't resolve auto
+               margins in a flex column the way browsers do here (confirmed by
+               comparing against the working .address-container fixed-offset
+               pattern in the tri-fold template above). Clears the 1in indicia
+               box (0.2in-1.2in) with room to spare, leaving safety margin below. */
+            margin-top: 3.3in;
+        }
+        .address-line {
+            font-size: 11pt;
+            line-height: 1.55;
+            color: #000;
+        }
+        .address-name {
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    {% for mailer in mailers %}
+    <div class="mailer">
+        <div class="content-side">
+            <div class="mini-header">GEBARAH REAL ESTATE GROUP</div>
+            <div class="section-title">Recent Nearby Sales</div>
+            <table class="property-table{% if compact %} property-table--compact{% endif %}">
+                <tr>
+                    <th>Address</th>
+                    <th>Price</th>
+                    <th>Bed/Bath</th>
+                    <th>Sq Ft</th>
+                </tr>
+                {% for property in mailer.nearby %}
+                <tr>
+                    <td>{{ property['Address'][:25] }}{% if property['Address']|length > 25 %}...{% endif %}</td>
+                    <td class="price-cell">${{ "{:,.0f}".format(property['Purchase Amt'] / 1000) }}k</td>
+                    <td>{{ property['Beds'] }}/{{ property['Baths'] }}</td>
+                    <td>{{ "{:,.0f}".format(property['Sq Ft']) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+            <div class="map-box">
+                <img src="{{ mailer.map_url }}" alt="Recent Public Records Sales">
+            </div>
+            <div class="map-legend">
+                <span class="legend-red">Your Home</span> &nbsp;|&nbsp;
+                <span class="legend-green">Recent Public Records Sales</span>
+            </div>
+            <div class="map-spacer"></div>
+        </div>
+        <div class="address-side">
+            {% if indicia_img %}
+            <div class="stamp-box"><img src="{{ indicia_img }}" alt="USPS Permit Indicia"></div>
+            {% endif %}
+            <div class="address-block">
+                <div class="address-line address-name">{{ mailer.first_name }} {{ mailer.last_name }}</div>
+                <div class="address-line">{{ mailer.address }}</div>
+                <div class="address-line">{{ mailer.city }}, CA {{ mailer.zip_code }}</div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</body>
+</html>
+"""
+
+
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def image_to_base64(image_path):
@@ -452,7 +675,7 @@ def geocode_address(row, mapbox_token, cache):
             save_cache(cache)
             return coords
     except Exception as e:
-        print(f"Geocoding failed for {address}: {e}")
+        logger.warning("Geocoding failed", extra={'address': address, 'error': str(e)})
 
     return None
 
@@ -531,6 +754,50 @@ def find_nearest_sold(client_coords, sold_df, n=3, client_row=None, filter_setti
     return candidates.head(n).to_dict('records')
 
 
+def _build_mailer_context(client, valid_sold, num_nearby, filter_settings, mapbox_token, map_size):
+    """Build the Jinja2 render context for a single client's mailer.
+
+    map_size is a Mapbox pixel size string, e.g. '500x254', matched to the
+    2-up map box's aspect ratio so object-fit:cover doesn't crop the pins
+    (see plan section 4.2). Shared by both the tri-fold and 2-up layouts.
+    """
+    nearby = find_nearest_sold(client['coords'], valid_sold, n=num_nearby, client_row=client, filter_settings=filter_settings)
+    lat, lon = client['coords']
+
+    markers = f"pin-l+c0392b({lon},{lat})"
+    if nearby:
+        for home in nearby:
+            if home.get('coords'):
+                h_lat, h_lon = home['coords']
+                markers += f",pin-s+27ae60({h_lon},{h_lat})"
+
+    map_url = (
+        f"https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/"
+        f"{markers}/{lon},{lat},14,0/{map_size}@2x?access_token={mapbox_token}"
+    )
+
+    first_name = str(client.get('Primary First', '')).strip()
+    last_name = str(client.get('Primary Last', '')).strip()
+    if not first_name or first_name.lower() == 'nan':
+        first_name = 'Neighbor'
+    else:
+        first_name = first_name.upper()
+    if last_name.lower() == 'nan':
+        last_name = ''
+    else:
+        last_name = last_name.upper()
+
+    return {
+        'first_name': first_name,
+        'last_name': last_name,
+        'address': str(client.get('Address', '')).strip(),
+        'city': str(client.get('City', 'BAKERSFIELD')).strip().upper(),
+        'zip_code': str(client.get('ZIP', '')).split('.')[0].strip(),
+        'nearby': nearby,
+        'map_url': map_url,
+    }
+
+
 # ─── Main Generation ──────────────────────────────────────────────────────────
 
 def generate_mailers(
@@ -544,10 +811,14 @@ def generate_mailers(
     num_nearby=3,
     num_clients='all',
     progress_callback=None,
-    filter_settings=None
+    filter_settings=None,
+    layout='trifold'
 ):
     """
     Generate mailer PDFs from CSV data (matches mailer_app_trifold.py logic).
+
+    layout: 'trifold' (default, 1 client per 8.5x11 page) or
+            'two_up' (2 clients per 8.27x11.69 A4 sheet, cut in half).
 
     progress_callback(current_step, total_steps, message) is called frequently
     so the web UI can poll for live updates.
@@ -574,7 +845,7 @@ def generate_mailers(
         # ── Persistent cache (shared across all jobs) ──
         cache = load_cache()
 
-        # ── Load banner images as base64 ──
+        # ── Load banner images as base64 (tri-fold only) ──
         top_banner_img = image_to_base64(top_banner_path) if top_banner_path else None
         bottom_banner_img = image_to_base64(bottom_banner_path) if bottom_banner_path else None
         right_side_img = image_to_base64(right_side_image_path) if right_side_image_path else None
@@ -602,6 +873,10 @@ def generate_mailers(
         total_steps = total_clients + total_sold + total_clients + 1
         step = 0
 
+        logger.info("Mailer generation started", extra={
+            'layout': layout, 'clients': total_clients, 'sold': total_sold, 'num_nearby': num_nearby,
+        })
+
         # ── Geocode clients ──
         client_coords = []
         for i, (_, row) in enumerate(df_clients.iterrows()):
@@ -627,62 +902,80 @@ def generate_mailers(
         if skipped_clients > 0:
             result['skipped'] = [{'count': skipped_clients, 'reason': 'Geocoding failed'}]
 
-        # ── Generate PDFs ──
-        template = Template(HTML_TEMPLATE)
         pdf_files = []
 
-        for idx, (index, client) in enumerate(valid_clients.iterrows()):
-            nearby = find_nearest_sold(client['coords'], valid_sold, n=num_nearby, client_row=client, filter_settings=filter_settings)
-            lat, lon = client['coords']
+        if layout == 'two_up':
+            # ── 2-Up A4: 2 clients per sheet, cut in half ──
+            indicia_img = image_to_base64(INDICIA_PATH)
+            if not indicia_img:
+                logger.warning("USPS indicia missing - sheets will render without it",
+                               extra={'expected_path': INDICIA_PATH})
 
-            # Mapbox Static Map URL (same as trifold app)
-            markers = f"pin-l+c0392b({lon},{lat})"
-            if nearby:
-                for home in nearby:
-                    if home.get('coords'):
-                        h_lat, h_lon = home['coords']
-                        markers += f",pin-s+27ae60({h_lon},{h_lat})"
+            template = Template(TWO_UP_TEMPLATE)
+            map_size = f"{MAP_REQ_W_PX}x{MAP_REQ_H_PX}"
+            compact = num_nearby >= COMPACT_TABLE_THRESHOLD
+            clients = list(valid_clients.iterrows())
 
-            map_url = (
-                f"https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/"
-                f"{markers}/{lon},{lat},14,0/500x400@2x?access_token={mapbox_token}"
-            )
+            # Walk the client list two at a time: (0,1), (2,3), (4,5) ...
+            for sheet_idx in range(0, len(clients), 2):
+                pair = clients[sheet_idx:sheet_idx + 2]  # 1 or 2 clients; last sheet may be 1
 
-            # Client info (same logic as trifold app)
-            first_name = str(client.get('Primary First', '')).strip()
-            last_name = str(client.get('Primary Last', '')).strip()
-            if not first_name or first_name.lower() == 'nan':
-                first_name = 'Neighbor'
-            else:
-                first_name = first_name.upper()
-            if last_name.lower() == 'nan':
-                last_name = ''
-            else:
-                last_name = last_name.upper()
+                mailers = [
+                    _build_mailer_context(c, valid_sold, num_nearby, filter_settings, mapbox_token, map_size)
+                    for _, c in pair
+                ]
 
-            address = str(client.get('Address', '')).strip()
-            city = str(client.get('City', 'BAKERSFIELD')).strip().upper()
-            zip_code = str(client.get('ZIP', '')).split('.')[0].strip()
+                html_out = template.render(
+                    mailers=mailers,
+                    indicia_img=indicia_img,
+                    compact=compact,
+                    brand_bg=BRAND_BOX_BG,
+                    brand_text=BRAND_BOX_TEXT,
+                    map_h_in=MAP_H_IN,
+                )
 
-            html_out = template.render(
-                first_name=first_name,
-                last_name=last_name,
-                address=address,
-                city=city,
-                zip_code=zip_code,
-                nearby=nearby,
-                map_url=map_url,
-                top_banner_img=top_banner_img,
-                bottom_banner_img=bottom_banner_img,
-                right_side_img=right_side_img
-            )
+                sheet_num = (sheet_idx // 2) + 1
+                file_path = os.path.join(individual_dir, f"sheet_{sheet_num:03d}.pdf")
+                HTML(string=html_out).write_pdf(file_path)
+                pdf_files.append(file_path)
 
-            file_path = os.path.join(individual_dir, f"mailer_trifold_{idx}.pdf")
-            HTML(string=html_out).write_pdf(file_path)
-            pdf_files.append(file_path)
+                logger.info("Sheet rendered", extra={
+                    'layout': 'two_up', 'sheet': sheet_num, 'clients_on_sheet': len(pair),
+                })
 
-            step += 1
-            report(step, total_steps, f'Generated PDF {idx+1}/{len(valid_clients)}')
+                step += len(pair)
+                report(step, total_steps, f'Generated sheet {sheet_num} ({len(pair)} mailers)')
+
+            merged_name = 'final_mailers_2up.pdf'
+
+        else:
+            # ── Tri-fold: 1 client per 8.5x11 page (unchanged default behaviour) ──
+            template = Template(HTML_TEMPLATE)
+
+            for idx, (index, client) in enumerate(valid_clients.iterrows()):
+                ctx = _build_mailer_context(client, valid_sold, num_nearby, filter_settings, mapbox_token, '500x400')
+
+                html_out = template.render(
+                    first_name=ctx['first_name'],
+                    last_name=ctx['last_name'],
+                    address=ctx['address'],
+                    city=ctx['city'],
+                    zip_code=ctx['zip_code'],
+                    nearby=ctx['nearby'],
+                    map_url=ctx['map_url'],
+                    top_banner_img=top_banner_img,
+                    bottom_banner_img=bottom_banner_img,
+                    right_side_img=right_side_img
+                )
+
+                file_path = os.path.join(individual_dir, f"mailer_trifold_{idx}.pdf")
+                HTML(string=html_out).write_pdf(file_path)
+                pdf_files.append(file_path)
+
+                step += 1
+                report(step, total_steps, f'Generated PDF {idx+1}/{len(valid_clients)}')
+
+            merged_name = 'final_mailers_trifold.pdf'
 
         # ── Merge PDFs ──
         report(step, total_steps, 'Merging all PDFs...')
@@ -690,7 +983,7 @@ def generate_mailers(
             merger = PdfWriter()
             for pdf in pdf_files:
                 merger.append(pdf)
-            merged_path = os.path.join(output_dir, 'final_mailers_trifold.pdf')
+            merged_path = os.path.join(output_dir, merged_name)
             with open(merged_path, 'wb') as f:
                 merger.write(f)
             result['merged_pdf'] = merged_path
@@ -700,9 +993,14 @@ def generate_mailers(
         result['success'] = True
         result['pdf_files'] = pdf_files
 
+        logger.info("Mailer generation finished", extra={
+            'layout': layout, 'sheets': len(pdf_files), 'skipped': skipped_clients,
+        })
+
     except Exception as e:
         import traceback
         result['error'] = str(e)
         result['traceback'] = traceback.format_exc()
+        logger.error("Mailer generation failed", extra={'layout': layout, 'error': str(e)})
 
     return result

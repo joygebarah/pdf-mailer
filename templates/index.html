@@ -14,8 +14,8 @@
                 <span class="logo-icon">🏠</span>
                 <span class="logo-text">Gebarah Real Estate</span>
             </div>
-            <h1>Tri-Fold Mailer Generator</h1>
-            <p class="subtitle">8.5" x 11" Letter | #10 Window Envelope Compatible</p>
+            <h1>Mailer Generator</h1>
+            <p class="subtitle">Tri-Fold 8.5" x 11" &nbsp;|&nbsp; 2-Up A4 8.27" x 11.69"</p>
         </header>
         
         <!-- ══ SAVED SOLD LIST ══ (hidden — not yet funded) -->
@@ -174,11 +174,19 @@
             <!-- API & Settings Section -->
             <section class="form-section">
                 <h2>⚙️ Settings</h2>
-                <div class="form-grid">
+                <div class="form-group">
+                    <label for="layout">Mailer Layout</label>
+                    <select id="layout" name="layout">
+                        <option value="trifold" selected>Tri-Fold — 8.5" x 11" (1 per page)</option>
+                        <option value="two_up">2-Up A4 — 8.27" x 11.69" (2 per page)</option>
+                    </select>
+                    <span class="input-hint">2-Up prints two mailers per sheet — cut in half after printing</span>
+                </div>
+                <div class="form-grid" style="margin-top: 1rem;">
                     <div class="form-group">
                         <label for="mapbox_token">Mapbox API Token *</label>
                         <div class="password-input">
-                            <input type="password" id="mapbox_token" name="mapbox_token" 
+                            <input type="password" id="mapbox_token" name="mapbox_token"
                                    value="{{ default_mapbox_token }}" required
                                    placeholder="pk.eyJ1I...">
                             <button type="button" class="toggle-visibility" onclick="togglePassword()">👁</button>
@@ -190,12 +198,14 @@
                             <option value="3" selected>3 properties</option>
                             <option value="4">4 properties</option>
                             <option value="5">5 properties</option>
+                            <option value="6">6 properties</option>
+                            <option value="7">7 properties</option>
                         </select>
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 1rem;">
                     <label for="num_clients">Clients to Process</label>
-                    <input type="text" id="num_clients" name="num_clients" value="all" 
+                    <input type="text" id="num_clients" name="num_clients" value="all"
                            placeholder="Enter number or 'all'">
                     <span class="input-hint">Enter a number to limit, or 'all' for everyone</span>
                 </div>
@@ -386,7 +396,10 @@
 
                     // Show result panel
                     resultPanel.style.display = 'block';
-                    let summary = `Generated ${data.pdf_count} tri-fold mailer PDFs (8.5" x 11").`;
+                    const selectedLayout = document.getElementById('layout').value;
+                    let summary = selectedLayout === 'two_up'
+                        ? `Generated ${data.pdf_count} A4 sheets (8.27" x 11.69"), 2 mailers per sheet.`
+                        : `Generated ${data.pdf_count} tri-fold mailer PDFs (8.5" x 11").`;
                     if (data.skipped_count > 0) {
                         summary += ` Skipped ${data.skipped_count} addresses.`;
                     }
@@ -466,6 +479,26 @@
             const input    = document.getElementById('sold_csv');
             wrapper.style.display = this.checked ? 'none' : 'block';
             input.required = !this.checked;
+        });
+
+        // ─── 2-Up layout: banner uploads aren't used, grey them out ───────
+        document.getElementById('layout').addEventListener('change', function() {
+            const isTwoUp = this.value === 'two_up';
+            ['top_banner', 'bottom_banner', 'right_side_image'].forEach(id => {
+                const input = document.getElementById(id);
+                input.disabled = isTwoUp;
+                const wrapper = input.closest('.form-group');
+                wrapper.style.opacity = isTwoUp ? '0.5' : '1';
+                let hint = wrapper.querySelector('.two-up-hint');
+                if (isTwoUp && !hint) {
+                    hint = document.createElement('span');
+                    hint.className = 'input-hint two-up-hint';
+                    hint.textContent = 'Not used in the 2-Up layout';
+                    wrapper.appendChild(hint);
+                } else if (hint) {
+                    hint.remove();
+                }
+            });
         });
 
         // ─── Quick Lookup ─────────────────────────────────────────────────

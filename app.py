@@ -136,6 +136,7 @@ def run_generation(job_id, job_dir, params):
             num_clients=params.get('num_clients', 'all'),
             progress_callback=progress_callback,
             filter_settings=params.get('filter_settings'),
+            layout=params.get('layout', 'trifold'),
         )
 
         if not result['success']:
@@ -250,8 +251,12 @@ def generate():
                 f.save(right_side_path)
 
         mapbox_token = request.form.get('mapbox_token', os.getenv('MAPBOX_TOKEN', ''))
-        num_nearby = int(request.form.get('num_nearby', 3))
+        num_nearby = max(1, min(7, int(request.form.get('num_nearby', 3))))
         num_clients = request.form.get('num_clients', 'all')
+
+        layout = request.form.get('layout', 'trifold')
+        if layout not in ('trifold', 'two_up'):
+            layout = 'trifold'  # never trust the client; fall back to the safe default
 
         sqft_pct        = _parse_positive(request.form.get('sqft_pct'))
         age_years       = _parse_positive(request.form.get('age_years'))
@@ -295,6 +300,7 @@ def generate():
             'num_nearby': num_nearby,
             'num_clients': num_clients,
             'filter_settings': filter_settings,
+            'layout': layout,
         }
 
         # ── Launch background thread ──
